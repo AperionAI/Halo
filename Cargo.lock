@@ -101,6 +101,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "aperion-shield"
 version = "1.4.0"
+source = "git+https://github.com/AperionAI/shield.git?tag=shield-v1.4.0#bbecb494330be40524e8b123ed88e210962e57f9"
 dependencies = [
  "anyhow",
  "async-trait",

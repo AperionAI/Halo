@@ -9,7 +9,7 @@ so you can:
 - **Never get a runaway invoice** — local token/spend budgets with a hard-cap
   kill switch that works even fully offline.
 - **Keep secrets out of the model** — reversible cloaking + secret-shape
-  detection at the MCP seam (reused from [Aperion Shield](../shield-standalone)).
+  detection at the MCP seam (reused from [Aperion Shield](https://github.com/AperionAI/shield)).
 - **Prove it** — a tamper-evident, hash-chained local audit log and a
   metadata-only savings dashboard.
 
