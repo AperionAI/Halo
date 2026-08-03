@@ -187,23 +187,6 @@ HALO_RELAY_TOKEN=some-shared-token ./target/release/halo-relay --bind 127.0.0.1:
 Then set `relay_url` + `relay_token` in `~/.halo/config.yaml`. Without a relay,
 Halo is fully functional locally; only the hosted dashboard is unavailable.
 
-## What's intentionally NOT in v1.1
-
-- **Multi-turn semantic matching.** The semantic cache only considers a
-  fresh, single-user-turn request (see `eligible_query` in
-  `semantic_cache.rs`) — embedding and safely comparing a full conversation
-  history is a materially harder correctness problem, deferred rather than
-  shipped half-safe.
-- Encrypted audit escrow (v1 is tamper-evident via the HMAC chain, not
-  confidential), model routing tiers, multi-seat, alerting/webhooks, remote
-  kill, licensing on the relay, and per-model allowlists/RBAC.
-- Windows keychain persistence tuning.
-
-These are v1.2+ items; v1.1 ships only what's needed to be genuinely useful
-and cheap to run. (Token-level SSE streaming passthrough, exact-match caching
-of streamed requests, and the cross-provider semantic cache are all
-implemented — see `docs/DESIGN_REVIEW.md`.)
-
 ## License
 
 Apache-2.0.

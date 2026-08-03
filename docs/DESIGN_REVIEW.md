@@ -215,7 +215,7 @@ a model anywhere in the process. Both cost-accounting bugs found during
 live testing are fixed and covered by regression tests
 (`counterfactual::tests::semantic_cache_hit_trusts_reported_embedding_cost_not_zero`,
 `state.rs`'s override-precedence logic). Remaining scope line for v1.2:
-multi-turn semantic matching (see README).
+multi-turn semantic matching.
 
 ## v1.1.1: compression baseline + provider prompt-cache extension
 
