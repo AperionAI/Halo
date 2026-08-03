@@ -17,14 +17,13 @@ halo-common = { path = "../halo-common" }
 # (CloakVault) and credential-shape detection (taint::entities). This is the
 # explicit "reuse Shield, don't rebuild" decision from the architecture plan.
 #
-# Pinned to a git tag rather than crates.io: the published `aperion-shield`
-# crate lags the GitHub repo (crates.io currently has 1.0.1; the CloakVault
-# and taint modules Halo depends on shipped in 1.3/1.4, tags only). A git
-# dependency pinned to a tag is the correct fix here, not a path dependency
-# (which only works inside the monorepo -- Halo is its own repo now) and not
-# an unpinned crates.io version (which would silently be missing the modules
-# this code calls).
-aperion-shield = { git = "https://github.com/AperionAI/shield.git", tag = "shield-v1.4.0" }
+# A proper crates.io version dependency, not a path (only resolves inside
+# the monorepo -- Halo is its own repo) or an unpinned git dependency (which
+# crates.io itself would refuse if Halo is ever published there too). The
+# crates.io listing briefly lagged the GitHub repo's tags -- 1.0.1 was
+# missing the CloakVault/taint modules this code calls -- but is now caught
+# up to 1.4.0.
+aperion-shield = "1.4.0"
 
 tokio.workspace = true
 serde.workspace = true
