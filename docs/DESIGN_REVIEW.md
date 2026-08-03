@@ -128,3 +128,91 @@ how LiteLLM/Portkey/Helicone/OpenRouter solve the same problems. The one real
 gap was streaming, which is now implemented rather than deferred. Everything
 else found was either a small, cheap fix (now applied) or an intentional,
 documented scope boundary.
+
+## v1.1: cross-provider semantic cache
+
+Exact-match caching (v1) only catches byte-identical requests. The main
+Smartflow proxy's own semantic cache was reviewed as prior art going into this
+work, specifically to avoid two gaps found in it:
+
+1. **"First bucket match wins."** A cheap keyword partition (stage/intent) was
+   sometimes treated as sufficient on its own, without a similarity re-check
+   against the specific candidate. Halo's `semantic_cache.rs` always
+   cosine-re-checks every candidate in the partition against the live query
+   vector; the partition only narrows what gets scanned, never substitutes
+   for the check (`lookup_never_returns_below_threshold_even_same_partition`
+   is a regression test for exactly this).
+2. **No embedding provider abstraction** flexible enough to run fully
+   offline. `embeddings.rs` supports `openai` (real API), `ollama`
+   (self-hosted, still an HTTP call Halo makes to an already-running server,
+   never a model Halo loads itself), and `mock` (deterministic, zero-cost, for
+   tests/offline dev) — Halo never links a model runtime.
+
+**Cross-provider by design.** The partition key and stored answer deliberately
+exclude provider/model; a question answered once via one provider can serve a
+similar question later routed through another. The cached answer is always
+*re-rendered* into the requesting endpoint's own shape (`answer.rs`), buffered
+or as a synthetic SSE stream, never replayed as a raw stored HTTP body of a
+possibly-different shape. Live-verified (mock providers, real HTTP round
+trips through the shim): an OpenAI-origin answer served a same-wording
+request, a differently-worded paraphrase, and a differently-worded *streamed*
+request, all routed to/through Anthropic or back to OpenAI, with zero calls
+reaching the "wrong" provider's mock endpoint in any case:
+
+| request | similarity | origin -> serving | streamed |
+|---|---|---|---|
+| identical wording | 1.00 | openai gpt-4o -> anthropic claude-3.5-sonnet | no |
+| paraphrase ("...capital city of Italy") | 0.94 | openai -> anthropic | no |
+| same paraphrase | 0.94 | openai -> openai | **yes (SSE)** |
+
+A near-miss case (extra clause + internal punctuation pushing the mock
+embedder's crude bag-of-words similarity below threshold) correctly fell
+through to a live call rather than false-hitting — the safety property working
+as intended, not a bug. (Caveat: the `mock` provider is a dependency-free
+hash, not semantically meaningful the way a real embedding model is —
+fine for exercising plumbing, but real deployments should expect materially
+higher, better-calibrated similarity scores for true paraphrases than the
+mock's bag-of-words overlap gives you.)
+
+**Also extended in this pass: exact-match caching now covers streamed
+requests too** (`cache.rs` gained an `answer: Option<AnswerExtract>` field;
+`answer.rs` is shared by both cache layers), closing the "known, accepted
+limitation" called out earlier in this document.
+
+### Two real bugs found via live smoke testing (not just unit tests)
+
+1. **Mock/self-hosted embedding costs were billed at the price-table's
+   embedding-fallback rate instead of the provider's own (correctly $0) cost.**
+   `finalize_llm_call` computed cost purely from `PolicyDecision`, so a
+   `mock`/`ollama` embedding lookup — genuinely free — got charged the
+   fallback rate meant for an *unrecognized paid* embedding model. Fixed by
+   making an explicit `actual_cost_override` win regardless of decision
+   (`state.rs`), since the embedding client already knows its own true cost
+   authoritatively.
+2. **The relay's canonical cost recompute forced every cache-hit-flagged
+   event to $0, including semantic hits that made a real (if small) embedding
+   call.** `counterfactual::canonical` only looked at the `cache_hit` boolean;
+   a `SemanticCacheHit` sets that flag too (it's still "served from a local
+   cache" for dashboard purposes) but isn't actually free the way an
+   exact-match hit is. Fixed by threading `policy_decision` and the shim's
+   `reported_cost` through to the relay's SQLite schema and recompute logic:
+   `CacheHit` stays canonically forced to $0 (recomputed, not trusted, per the
+   relay's core "don't trust the client's math" property), `SemanticCacheHit`
+   trusts the reported embedding cost (there's no token-count-based way to
+   recompute an embedding-model charge from a *different* served model's
+   tokens), and everything else is recomputed from tokens exactly as before.
+
+Both were caught by an end-to-end smoke test with real HTTP round trips
+against mock providers, not by unit tests in isolation — the unit tests for
+each individual module (embedding client, price table, cache store) all
+passed correctly in isolation; the bugs were in how the pieces were wired
+together across the shim/relay boundary.
+
+## Bottom line (v1.1)
+
+Semantic caching is real, cross-provider, cosine-re-checked, and doesn't run
+a model anywhere in the process. Both cost-accounting bugs found during
+live testing are fixed and covered by regression tests
+(`counterfactual::tests::semantic_cache_hit_trusts_reported_embedding_cost_not_zero`,
+`state.rs`'s override-precedence logic). Remaining scope line for v1.2:
+multi-turn semantic matching (see README).

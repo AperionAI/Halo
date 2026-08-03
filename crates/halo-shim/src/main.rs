@@ -1,5 +1,6 @@
 //! Smartflow Halo shim -- the `halo` binary.
 
+mod answer;
 mod audit;
 mod budget;
 mod cache;
@@ -7,10 +8,12 @@ mod cache_control;
 mod cachekey;
 mod compress;
 mod config;
+mod embeddings;
 mod ingress;
 mod keys;
 mod mcp;
 mod report;
+mod semantic_cache;
 mod state;
 mod streaming;
 mod telemetry;
@@ -55,6 +58,24 @@ enum Cmd {
     Kill {
         agent: String,
     },
+    /// Manage the semantic cache's embedding API credential.
+    Embeddings {
+        #[command(subcommand)]
+        action: EmbeddingsCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum EmbeddingsCmd {
+    /// Store the embedding API key used by the semantic cache (OS keychain,
+    /// same storage as agent provider keys). Only needed when
+    /// `semantic_cache.provider: openai` in config.yaml; `ollama` talks to
+    /// your own server with no key, `mock` needs nothing.
+    SetKey {
+        /// If omitted, read from $HALO_EMBEDDING_KEY or stdin.
+        #[arg(long)]
+        key: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -67,8 +88,10 @@ enum AgentCmd {
         /// Real provider key. If omitted, read from $HALO_PROVIDER_KEY or stdin.
         #[arg(long)]
         key: Option<String>,
-        /// Custom OpenAI-compatible base URL (Groq, Together, Fireworks, a
-        /// local vLLM/Ollama server, ...). Ignored for --provider anthropic.
+        /// Custom base URL speaking the same wire shape as the chosen
+        /// provider (Groq/Together/Fireworks/a local vLLM/Ollama server for
+        /// --provider openai; a Bedrock Anthropic-shape proxy or local mock
+        /// for --provider anthropic).
         #[arg(long)]
         base_url: Option<String>,
     },
@@ -113,7 +136,38 @@ async fn main() -> Result<()> {
         Cmd::Status => status(paths),
         Cmd::Report { hours } => report_cmd(paths, hours),
         Cmd::Kill { agent } => kill(paths, &agent),
+        Cmd::Embeddings { action } => embeddings_cmd(paths, action),
     }
+}
+
+fn embeddings_cmd(paths: Paths, action: EmbeddingsCmd) -> Result<()> {
+    let ks = keys::KeyStore::new(paths);
+    match action {
+        EmbeddingsCmd::SetKey { key } => {
+            let secret = match key {
+                Some(k) => k,
+                None => match std::env::var("HALO_EMBEDDING_KEY") {
+                    Ok(k) if !k.is_empty() => k,
+                    _ => {
+                        eprint!("Enter the embedding API key (input is read from stdin): ");
+                        std::io::stderr().flush().ok();
+                        let mut line = String::new();
+                        std::io::stdin().read_line(&mut line)?;
+                        if line.trim().is_empty() {
+                            anyhow::bail!("no key provided");
+                        }
+                        line
+                    }
+                },
+            };
+            ks.store_secret(embeddings::EmbeddingClient::key_store_id(), secret.trim())?;
+            println!(
+                "Stored the embedding API key. Set `semantic_cache.enabled: true` in \
+                 ~/.halo/config.yaml to turn on the semantic cache."
+            );
+        }
+    }
+    Ok(())
 }
 
 fn agent_cmd(paths: Paths, action: AgentCmd) -> Result<()> {
@@ -132,25 +186,20 @@ fn agent_cmd(paths: Paths, action: AgentCmd) -> Result<()> {
                 Some(k) => k,
                 None => read_secret()?,
             };
-            if base_url.is_some() && matches!(provider, ProviderArg::Anthropic) {
-                eprintln!("warning: --base-url is ignored for --provider anthropic");
-            }
-            let effective_base_url = if matches!(provider, ProviderArg::Openai) {
-                base_url.clone()
-            } else {
-                None
-            };
-            let vkey = ks.issue(&name, provider.into(), secret.trim(), effective_base_url.clone())?;
+            let vkey = ks.issue(&name, provider.into(), secret.trim(), base_url.clone())?;
             println!("Registered agent '{name}'. Configure your runtime with:\n");
             match Provider::from(provider) {
                 Provider::Anthropic => {
                     println!("  ANTHROPIC_API_KEY={vkey}");
                     println!("  ANTHROPIC_BASE_URL=http://{listen}");
+                    if let Some(u) = &base_url {
+                        println!("  (proxied through to {u} -- an Anthropic-shaped endpoint)");
+                    }
                 }
                 _ => {
                     println!("  OPENAI_API_KEY={vkey}");
                     println!("  OPENAI_BASE_URL=http://{listen}/v1");
-                    if let Some(u) = &effective_base_url {
+                    if let Some(u) = &base_url {
                         println!("  (proxied through to {u} -- an OpenAI-compatible endpoint)");
                     }
                 }
@@ -271,6 +320,15 @@ async fn serve(paths: Paths) -> Result<()> {
     let device_id = ks.device_id()?;
 
     let cache = cache::CacheStore::open(&paths.cache(), cfg.cache.max_entries, cfg.cache.enabled)?;
+    let semantic = semantic_cache::SemanticCacheStore::open(&paths.semantic_cache(), cfg.semantic_cache.max_entries)?;
+    if cfg.semantic_cache.enabled {
+        tracing::info!(
+            provider = %cfg.semantic_cache.provider,
+            model = %cfg.semantic_cache.model,
+            threshold = cfg.semantic_cache.similarity_threshold,
+            "semantic cache enabled"
+        );
+    }
     let ledger = budget::Ledger::open(&paths.ledger(), cfg.budget.window_hours)?;
     let audit_log = Arc::new(Mutex::new(audit::AuditLog::open(
         &paths.audit(),
@@ -316,11 +374,20 @@ async fn serve(paths: Paths) -> Result<()> {
         );
     }
 
+    let embedder = Arc::new(embeddings::EmbeddingClient::new(
+        embeddings::EmbeddingProviderKind::parse(&cfg.semantic_cache.provider),
+        cfg.semantic_cache.model.clone(),
+        cfg.semantic_cache.base_url.clone(),
+        http.clone(),
+    ));
+
     let listen = cfg.listen.clone();
     let state = state::AppState {
         cfg: Arc::new(cfg),
         keys: ks,
         cache,
+        semantic,
+        embedder,
         ledger,
         audit_log,
         telem: telem.clone(),

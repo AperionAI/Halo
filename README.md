@@ -15,8 +15,9 @@ so you can:
 
 It is deliberately **light**: its own Rust workspace, a lean dependency tree,
 `redb`/SQLite single-file stores (no Redis, no Mongo, no Postgres), and **no
-embedding/semantic-cache path** in v1. Same posture as `shield-standalone` and
-`compass-standalone`.
+model of any kind running inside the process** — the optional semantic cache
+(below) gets its vectors from an external embeddings API call, never a local
+model. Same posture as `shield-standalone` and `compass-standalone`.
 
 ## Non-negotiable trust model
 
@@ -104,6 +105,48 @@ internally and, at the seam, reuses Shield's:
 - **taint** — credential-shape detection flags raw secrets heading to a tool or
   echoed back by one, recorded (kinds only) in the audit log.
 
+### Semantic cache (cross-provider, off by default)
+
+Exact-match caching only catches byte-identical requests. The semantic cache
+catches the much larger set of *reworded* repeats — a question asked twice in
+different words, possibly even routed through different agents/providers —
+without running any model locally:
+
+```yaml
+semantic_cache:
+  enabled: true
+  provider: openai        # "openai" | "ollama" (self-hosted) | "mock" (offline dev)
+  model: text-embedding-3-small
+  similarity_threshold: 0.85
+  max_entries: 500
+```
+
+```bash
+./target/release/halo embeddings set-key            # prompts for the embeddings API key
+```
+
+How it stays safe and cheap rather than a source of wrong or stale answers:
+
+- **Cosine similarity is always re-checked** against the live query vector —
+  a cheap keyword partition (conversational stage + intent, no provider/model)
+  only narrows *which* candidates get compared; it never decides a hit by
+  itself. Below `similarity_threshold`, it's a miss, full stop.
+- **Cross-provider and cross-model by design.** A question answered once via
+  Anthropic can serve a similar question later routed to OpenAI — the cached
+  answer is re-rendered into the requesting endpoint's own JSON (or SSE
+  stream) shape, never replayed as a raw stored HTTP body.
+- **Tool calls, structured output (`response_format` beyond plain text), and
+  multi-turn history are excluded entirely** — a similar-but-not-identical
+  prompt in any of those modes may legitimately need a different tool call or
+  may not conform to a schema; replaying free text in its place would be
+  unsafe. These fall straight through to a live call, same as today.
+- **The embedding lookup's own (small) cost is billed and shown separately**
+  in `halo report` and `halo-relay`'s aggregation (`SemanticCacheHit` is its
+  own telemetry decision, distinct from the free exact-match `CacheHit`) —
+  never silently folded into "$0, it was cached."
+- **Off by default.** Unlike exact-match caching, this makes a real API call
+  (unless `provider: mock`/`ollama`) on every miss, so it's opt-in.
+
 ### The relay (optional)
 
 ```bash
@@ -114,21 +157,22 @@ HALO_RELAY_TOKEN=some-shared-token ./target/release/halo-relay --bind 127.0.0.1:
 Then set `relay_url` + `relay_token` in `~/.halo/config.yaml`. Without a relay,
 Halo is fully functional locally; only the hosted dashboard is unavailable.
 
-## What's intentionally NOT in v1
+## What's intentionally NOT in v1.1
 
-- Semantic / embedding (L2) cache and any embedding provider — the heaviest,
-  least production-ready part of the main proxy. Exact-match captures the
-  within-user repetition that dominates real savings.
+- **Multi-turn semantic matching.** The semantic cache only considers a
+  fresh, single-user-turn request (see `eligible_query` in
+  `semantic_cache.rs`) — embedding and safely comparing a full conversation
+  history is a materially harder correctness problem, deferred rather than
+  shipped half-safe.
 - Encrypted audit escrow (v1 is tamper-evident via the HMAC chain, not
   confidential), model routing tiers, multi-seat, alerting/webhooks, remote
   kill, licensing on the relay, and per-model allowlists/RBAC.
-- Caching of streamed responses (exact-match cache only applies to
-  non-streamed requests) and Windows keychain persistence tuning.
+- Windows keychain persistence tuning.
 
-These are v1.1+ items; v1 ships only what's needed to be genuinely useful and
-cheap to run. (Token-level SSE streaming passthrough itself *is* in v1 -- see
-`docs/DESIGN_REVIEW.md` for why buffering full completions would have been a
-regression, not a reasonable v1 cut.)
+These are v1.2+ items; v1.1 ships only what's needed to be genuinely useful
+and cheap to run. (Token-level SSE streaming passthrough, exact-match caching
+of streamed requests, and the cross-provider semantic cache are all
+implemented — see `docs/DESIGN_REVIEW.md`.)
 
 ## License
 

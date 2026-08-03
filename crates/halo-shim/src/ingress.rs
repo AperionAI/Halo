@@ -15,10 +15,13 @@
 //!
 //! Provider API keys never leave this process's memory + the OS keychain.
 
+use crate::answer::AnswerExtract;
 use crate::budget::{BudgetVerdict, Caps};
 use crate::cache::CacheEntry;
+use crate::embeddings::EmbeddingProviderKind;
+use crate::semantic_cache::SemanticEntry;
 use crate::state::{AppState, LlmOutcome};
-use crate::{cachekey, compress, streaming, util};
+use crate::{answer, cachekey, compress, embeddings, semantic_cache, streaming, util};
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -30,6 +33,15 @@ use axum::{
 use halo_common::pricing::estimate_cost_usd;
 use halo_common::telemetry::{PolicyDecision, Provider};
 use serde_json::Value;
+
+/// Carries a semantic-cache-miss's already-computed query embedding forward
+/// to the post-completion store step, so a request that misses the semantic
+/// cache never pays for a second embedding call just to store its own
+/// answer.
+struct SemanticMissContext {
+    partition: String,
+    vector: Vec<f32>,
+}
 
 /// Which OpenAI/Anthropic surface this request hit.
 #[derive(Clone, Copy)]
@@ -216,9 +228,9 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         }
     }
 
-    // 3. Exact-match cache lookup (on the original request shape). Streaming
-    // requests never produce a cache key (see `cachekey::request_cache_key`),
-    // so this is naturally skipped for them.
+    // 3. Exact-match cache lookup (on the original request shape). The key is
+    // independent of the `stream` flag (see `cachekey::request_cache_key`),
+    // so a hit here can come from either a prior streamed or buffered call.
     let cache_key = if kind.is_chat() {
         cachekey::request_cache_key(provider_str, &body)
     } else {
@@ -226,27 +238,46 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
     };
     if let Some(key) = &cache_key {
         if let Ok(Some(entry)) = st.cache.get(key) {
-            st.finalize_llm_call(LlmOutcome {
-                agent: agent.clone(),
-                provider,
-                model: entry.model.clone(),
-                tokens_in: entry.tokens_in,
-                tokens_out: entry.tokens_out,
-                tokens_cached: 0,
-                task_class: kind.task_class().into(),
-                latency_ms: 0,
-                compression_ratio: 1.0,
-                decision: PolicyDecision::CacheHit,
-                error_class: String::new(),
-                record_spend: false,
-                streamed: false,
-            })
-            .await;
-            return json_response(
-                StatusCode::from_u16(entry.status).unwrap_or(StatusCode::OK),
-                &entry.content_type,
-                entry.body,
-            );
+            // A streaming request can only be served from an entry that
+            // captured a replayable plain-text answer. Entries without one
+            // (written before this field existed, or a response that wasn't
+            // safely extractable as plain text) fall through to a live call
+            // rather than serving the wrong shape.
+            if !is_stream || entry.answer.is_some() {
+                let response = if is_stream {
+                    let a = entry.answer.as_ref().expect("checked above");
+                    let sse = answer::render_stream(provider, a, &entry.model, entry.tokens_in, entry.tokens_out);
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "text/event-stream")
+                        .body(Body::from(sse))
+                        .unwrap()
+                } else {
+                    json_response(
+                        StatusCode::from_u16(entry.status).unwrap_or(StatusCode::OK),
+                        &entry.content_type,
+                        entry.body.clone(),
+                    )
+                };
+                st.finalize_llm_call(LlmOutcome {
+                    agent: agent.clone(),
+                    provider,
+                    model: entry.model.clone(),
+                    tokens_in: entry.tokens_in,
+                    tokens_out: entry.tokens_out,
+                    tokens_cached: 0,
+                    task_class: kind.task_class().into(),
+                    latency_ms: 0,
+                    compression_ratio: 1.0,
+                    decision: PolicyDecision::CacheHit,
+                    error_class: String::new(),
+                    record_spend: false,
+                    streamed: is_stream,
+                    actual_cost_override: None,
+                })
+                .await;
+                return response;
+            }
         }
     }
 
@@ -284,6 +315,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             error_class: String::new(),
             record_spend: false,
             streamed: false,
+            actual_cost_override: None,
         })
         .await;
         return error_response(
@@ -295,6 +327,110 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         );
     }
     let soft_warned = matches!(verdict, BudgetVerdict::SoftWarn { .. });
+
+    // 4.5 Semantic (embedding-similarity) cache. Only reached once the
+    // hard-cap check above has passed, so an already-blocked agent never
+    // spends even the tiny embedding-lookup cost. Chat-only -- an
+    // /v1/embeddings call has nothing to semantically match against.
+    //
+    // The embedding call's cost is billed the moment it's made (below),
+    // independent of whether it turns out to be a hit or a miss: the spend
+    // already happened by the time we know which. A hit folds that cost into
+    // the single `SemanticCacheHit` telemetry event via `actual_cost_override`;
+    // a miss gets its own small `task_class: "embedding"` event immediately,
+    // and the resulting vector is carried forward in `semantic_miss` so
+    // storing this request's own answer afterward never pays for a second
+    // embedding call.
+    let mut semantic_miss: Option<SemanticMissContext> = None;
+    if kind.is_chat() && st.cfg.semantic_cache.enabled {
+        if let Some(orig) = &original {
+            if let Some(sq) = semantic_cache::eligible_query(orig) {
+                let embed_key = if matches!(st.embedder.kind, EmbeddingProviderKind::Openai) {
+                    st.keys.get_secret(embeddings::EmbeddingClient::key_store_id()).ok()
+                } else {
+                    None
+                };
+                let embed_started = std::time::Instant::now();
+                match st.embedder.embed(&sq.query_text, embed_key.as_deref(), &st.prices).await {
+                    Ok(er) => match st.semantic.lookup(&sq.partition, &er.vector, st.cfg.semantic_cache.similarity_threshold) {
+                        Ok(Some((entry, similarity))) => {
+                            let tokens_in = util::approx_tokens_from_chars(outbound.len());
+                            let response = if is_stream {
+                                let sse = answer::render_stream(provider, &entry.answer, &model, tokens_in, entry.tokens_out);
+                                Response::builder()
+                                    .status(StatusCode::OK)
+                                    .header(header::CONTENT_TYPE, "text/event-stream")
+                                    .body(Body::from(sse))
+                                    .unwrap()
+                            } else {
+                                let json = answer::render_buffered(provider, &entry.answer, &model, tokens_in, entry.tokens_out);
+                                json_response(StatusCode::OK, "application/json", json.to_string())
+                            };
+                            st.audit(serde_json::json!({
+                                "kind": "semantic_cache_hit",
+                                "agent": agent,
+                                "similarity": similarity,
+                                "partition": sq.partition,
+                                "origin_provider": entry.origin_provider.as_str(),
+                                "origin_model": entry.origin_model,
+                                "serving_provider": provider.as_str(),
+                                "serving_model": model,
+                            }));
+                            st.finalize_llm_call(LlmOutcome {
+                                agent: agent.clone(),
+                                provider,
+                                model: model.clone(),
+                                tokens_in,
+                                tokens_out: entry.tokens_out,
+                                tokens_cached: 0,
+                                task_class: kind.task_class().into(),
+                                latency_ms: embed_started.elapsed().as_millis() as u64,
+                                compression_ratio,
+                                decision: PolicyDecision::SemanticCacheHit,
+                                error_class: String::new(),
+                                record_spend: true,
+                                streamed: is_stream,
+                                actual_cost_override: Some(er.cost_usd),
+                            })
+                            .await;
+                            return response;
+                        }
+                        Ok(None) => {
+                            // Bill the lookup embedding call now -- the spend
+                            // already happened, independent of what the live
+                            // completion below does next. `actual_cost_override`
+                            // trusts the embedding provider's own cost
+                            // (correctly $0 for `mock`/`ollama`) instead of
+                            // recomputing from the model-name price table.
+                            st.finalize_llm_call(LlmOutcome {
+                                agent: agent.clone(),
+                                provider,
+                                model: st.embedder.model.clone(),
+                                tokens_in: er.tokens,
+                                tokens_out: 0,
+                                tokens_cached: 0,
+                                task_class: "embedding".into(),
+                                latency_ms: embed_started.elapsed().as_millis() as u64,
+                                compression_ratio: 1.0,
+                                decision: PolicyDecision::Allow,
+                                error_class: String::new(),
+                                record_spend: er.cost_usd > 0.0,
+                                streamed: false,
+                                actual_cost_override: Some(er.cost_usd),
+                            })
+                            .await;
+                            semantic_miss = Some(SemanticMissContext {
+                                partition: sq.partition,
+                                vector: er.vector,
+                            });
+                        }
+                        Err(e) => tracing::warn!("semantic cache lookup failed: {e}"),
+                    },
+                    Err(e) => tracing::debug!("semantic cache embed skipped: {e}"),
+                }
+            }
+        }
+    }
 
     // 5. Forward to the real provider with the real key.
     let real_key = match st.keys.get_secret(&agent) {
@@ -338,6 +474,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
                 error_class: err_class.into(),
                 record_spend: false,
                 streamed: false,
+                actual_cost_override: None,
             })
             .await;
             return error_response(StatusCode::BAD_GATEWAY, &format!("upstream error: {e}"));
@@ -362,6 +499,8 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             caps,
             resp,
             started,
+            cache_key,
+            semantic_miss,
         )
         .await;
     }
@@ -412,22 +551,41 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         error_class,
         record_spend: status.is_success(),
         streamed: false,
+        actual_cost_override: None,
     })
     .await;
 
-    // 7. Store in cache on a clean success.
+    // 7. Store in cache on a clean success. `answer_extract` is `None` for
+    // tool-call responses (or anything else not safely summarizable as plain
+    // text) -- those still get an exact-match entry (for a byte-identical
+    // future non-streaming request) but never seed the semantic cache and
+    // never let a future *streaming* request replay this exact-match entry.
     if status.is_success() {
+        let answer_extract: Option<AnswerExtract> = parsed.as_ref().and_then(|j| answer::from_buffered(provider, j));
         if let Some(key) = &cache_key {
             let entry = CacheEntry {
                 status: status.as_u16(),
                 content_type: ct.clone(),
                 body: resp_body.clone(),
-                model: effective_model,
+                model: effective_model.clone(),
                 tokens_in,
                 tokens_out,
                 created_at: chrono::Utc::now().timestamp(),
+                answer: answer_extract.clone(),
             };
             let _ = st.cache.put(key, &entry);
+        }
+        if let (Some(ctx), Some(ans)) = (&semantic_miss, &answer_extract) {
+            let se = SemanticEntry {
+                embedding: ctx.vector.clone(),
+                partition: ctx.partition.clone(),
+                answer: ans.clone(),
+                origin_provider: provider,
+                origin_model: effective_model,
+                tokens_out,
+                created_at: chrono::Utc::now().timestamp(),
+            };
+            let _ = st.semantic.store(&uuid::Uuid::new_v4().to_string(), &se);
         }
     }
 
@@ -459,6 +617,8 @@ async fn stream_response(
     caps: Caps,
     mut upstream: reqwest::Response,
     started: std::time::Instant,
+    cache_key: Option<String>,
+    semantic_miss: Option<SemanticMissContext>,
 ) -> Response {
     let ct = upstream
         .headers()
@@ -512,8 +672,9 @@ async fn stream_response(
         drop(tx); // closes the response body to the client.
 
         let text = String::from_utf8_lossy(&acc);
+        let result = streaming::extract_stream_result(provider, &text, &fallback_model);
         let (tokens_in, tokens_out, tokens_cached, model) =
-            streaming::extract_usage(provider, &text, &fallback_model);
+            (result.tokens_in, result.tokens_out, result.tokens_cached, result.model.clone());
         let decision = if abort_reason.is_some() {
             PolicyDecision::BudgetBlocked
         } else if soft_warned {
@@ -522,9 +683,9 @@ async fn stream_response(
             PolicyDecision::Allow
         };
         st.finalize_llm_call(LlmOutcome {
-            agent,
+            agent: agent.clone(),
             provider,
-            model,
+            model: model.clone(),
             tokens_in,
             tokens_out,
             tokens_cached,
@@ -532,11 +693,47 @@ async fn stream_response(
             latency_ms: started.elapsed().as_millis() as u64,
             compression_ratio,
             decision,
-            error_class: abort_reason.unwrap_or_default(),
+            error_class: abort_reason.clone().unwrap_or_default(),
             record_spend: true, // bill whatever was actually streamed, even if aborted.
             streamed: true,
+            actual_cost_override: None,
         })
         .await;
+
+        // Feed the exact-match and semantic caches from a cleanly-finished
+        // stream, exactly like the buffered path does. Never on an abort --
+        // partial/truncated content must not be replayed as a complete
+        // answer later.
+        if abort_reason.is_none() {
+            if let Some(ans) = &result.answer {
+                if let Some(key) = &cache_key {
+                    let body = answer::render_buffered(provider, ans, &model, tokens_in, tokens_out).to_string();
+                    let entry = CacheEntry {
+                        status: 200,
+                        content_type: "application/json".into(),
+                        body,
+                        model: model.clone(),
+                        tokens_in,
+                        tokens_out,
+                        created_at: chrono::Utc::now().timestamp(),
+                        answer: Some(ans.clone()),
+                    };
+                    let _ = st.cache.put(key, &entry);
+                }
+                if let Some(ctx) = &semantic_miss {
+                    let se = SemanticEntry {
+                        embedding: ctx.vector.clone(),
+                        partition: ctx.partition.clone(),
+                        answer: ans.clone(),
+                        origin_provider: provider,
+                        origin_model: model,
+                        tokens_out,
+                        created_at: chrono::Utc::now().timestamp(),
+                    };
+                    let _ = st.semantic.store(&uuid::Uuid::new_v4().to_string(), &se);
+                }
+            }
+        }
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);

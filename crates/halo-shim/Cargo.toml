@@ -12,7 +12,12 @@ name = "halo"
 path = "src/main.rs"
 
 [dependencies]
-halo-common = { path = "../halo-common" }
+# `version` alongside `path` is required for `cargo publish` to succeed --
+# crates.io refuses a path-only dependency since it can't resolve it outside
+# this repo. halo-common isn't published yet either (halo-shim isn't a
+# meaningful standalone crate without it), so this is prep, not a live fix:
+# publish halo-common 0.2.0 first, then halo-shim can publish against it.
+halo-common = { path = "../halo-common", version = "0.2.0" }
 # Reuse Shield's library surface for the MCP seam: reversible tokenization
 # (CloakVault) and credential-shape detection (taint::entities). This is the
 # explicit "reuse Shield, don't rebuild" decision from the architecture plan.

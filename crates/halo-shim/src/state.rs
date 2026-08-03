@@ -5,8 +5,10 @@ use crate::budget::Ledger;
 use crate::cache::CacheStore;
 use crate::cache_control::CacheControlInjector;
 use crate::config::Config;
+use crate::embeddings::EmbeddingClient;
 use crate::keys::KeyStore;
 use crate::mcp::McpManager;
+use crate::semantic_cache::SemanticCacheStore;
 use crate::telemetry::Telemetry;
 use halo_common::pricing::{estimate_cost_usd, PriceTable};
 use halo_common::telemetry::{PolicyDecision, Provider, TelemetryEvent};
@@ -17,6 +19,10 @@ pub struct AppState {
     pub cfg: Arc<Config>,
     pub keys: Arc<KeyStore>,
     pub cache: Arc<CacheStore>,
+    /// Always constructed (the redb file is cheap to open); gated at the call
+    /// site by `cfg.semantic_cache.enabled` so "disabled" is a true no-op.
+    pub semantic: Arc<SemanticCacheStore>,
+    pub embedder: Arc<EmbeddingClient>,
     pub ledger: Arc<Ledger>,
     pub audit_log: Arc<Mutex<AuditLog>>,
     pub telem: Telemetry,
@@ -53,10 +59,16 @@ impl AppState {
     /// the two can't drift apart on how a call is billed.
     #[allow(clippy::too_many_arguments)]
     pub async fn finalize_llm_call(&self, o: LlmOutcome) -> f64 {
-        let actual_cost = if o.decision == PolicyDecision::CacheHit {
-            0.0
-        } else {
-            estimate_cost_usd(&self.prices, &o.model, o.tokens_in, o.tokens_out, o.tokens_cached)
+        let actual_cost = match (o.decision, o.actual_cost_override) {
+            // An explicit override always wins, regardless of decision: it
+            // means the caller already knows the real cost (e.g. an
+            // embedding provider's own accounting, which is authoritative --
+            // for `Mock`/`Ollama` that's genuinely $0, and recomputing from
+            // the model-name price table instead would wrongly charge the
+            // embedding-fallback rate for a call that cost nothing).
+            (_, Some(v)) => v,
+            (PolicyDecision::CacheHit, None) => 0.0,
+            (_, None) => estimate_cost_usd(&self.prices, &o.model, o.tokens_in, o.tokens_out, o.tokens_cached),
         };
         // Counterfactual: no provider cache discount and no compression --
         // what this would have cost without either optimization.
@@ -80,7 +92,17 @@ impl AppState {
             tokens_in: o.tokens_in,
             tokens_out: o.tokens_out,
             tokens_cached: o.tokens_cached,
-            cache_hit: o.decision == PolicyDecision::CacheHit,
+            // Both hit kinds mean "the local machine served this, the
+            // provider was never called for a completion" -- the relay's
+            // fleet-wide savings aggregate treats both as pure savings. The
+            // semantic hit's small real embedding cost is fully accounted for
+            // locally (ledger + audit below); folding it into the relay's
+            // cross-device aggregate too would be a rounding-level nicety,
+            // not a correctness requirement (see docs/DESIGN_REVIEW.md).
+            cache_hit: matches!(
+                o.decision,
+                PolicyDecision::CacheHit | PolicyDecision::SemanticCacheHit
+            ),
             task_class: o.task_class.clone(),
             latency_ms: o.latency_ms,
             estimated_cost: actual_cost,
@@ -123,4 +145,7 @@ pub struct LlmOutcome {
     /// hits and hard-blocked requests, which never called the provider).
     pub record_spend: bool,
     pub streamed: bool,
+    /// Used only for `PolicyDecision::SemanticCacheHit`: the real cost of the
+    /// embedding-lookup call, decoupled from the served model's token price.
+    pub actual_cost_override: Option<f64>,
 }

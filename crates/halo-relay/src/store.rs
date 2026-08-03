@@ -7,7 +7,7 @@
 use crate::counterfactual::{canonical, EventFacts};
 use anyhow::Result;
 use halo_common::pricing::PriceTable;
-use halo_common::telemetry::TelemetryEvent;
+use halo_common::telemetry::{PolicyDecision, TelemetryEvent};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -91,7 +91,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT agent_id, model, tokens_in, tokens_out, tokens_cached, cache_hit,
-                    compression_ratio
+                    compression_ratio, policy_decision, estimated_cost
              FROM events WHERE ts >= ?1",
         )?;
         let rows = stmt.query_map(params![since_ts], |r| {
@@ -103,6 +103,8 @@ impl Store {
                 tokens_cached: r.get::<_, i64>(4)? as u64,
                 cache_hit: r.get::<_, i64>(5)? != 0,
                 compression_ratio: r.get(6)?,
+                policy_decision: parse_decision(&r.get::<_, String>(7)?),
+                reported_cost: r.get(8)?,
             })
         })?;
 
@@ -118,6 +120,8 @@ impl Store {
                     tokens_cached: row.tokens_cached,
                     compression_ratio: row.compression_ratio,
                     cache_hit: row.cache_hit,
+                    policy_decision: row.policy_decision,
+                    reported_cost: row.reported_cost,
                 },
             );
             for bucket in [
@@ -148,6 +152,24 @@ struct Row {
     tokens_cached: u64,
     cache_hit: bool,
     compression_ratio: f64,
+    policy_decision: PolicyDecision,
+    reported_cost: f64,
+}
+
+/// The `events` table stores `policy_decision` as free text (see
+/// `TelemetryEvent`/`PolicyDecision::as_str`); parse it back for the
+/// canonical recompute. An unrecognized value (e.g. a newer shim's decision
+/// variant talking to an older relay) degrades to `Allow` -- i.e. cost is
+/// recomputed from tokens rather than silently trusted or silently zeroed.
+fn parse_decision(s: &str) -> PolicyDecision {
+    match s {
+        "cache_hit" => PolicyDecision::CacheHit,
+        "semantic_cache_hit" => PolicyDecision::SemanticCacheHit,
+        "budget_blocked" => PolicyDecision::BudgetBlocked,
+        "soft_cap_warn" => PolicyDecision::SoftCapWarn,
+        "policy_blocked" => PolicyDecision::PolicyBlocked,
+        _ => PolicyDecision::Allow,
+    }
 }
 
 #[derive(Debug, Default, Serialize, Clone)]

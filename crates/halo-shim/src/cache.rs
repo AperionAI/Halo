@@ -1,17 +1,18 @@
 //! Exact-match L1 response cache (redb-backed, hard entry cap).
 //!
-//! Deliberately exact-match only for v1 -- no embeddings, no semantic
-//! similarity, no candle/HF/Ollama. The architecture analysis found cache
+//! Exact-match, not similarity-based: the architecture analysis found cache
 //! value is dominated by within-user repetition (fixed system prompts,
-//! polling loops, repeated tool schemas), which exact-match already captures,
-//! and the embedding path is the heaviest, least production-ready part of the
-//! main proxy's cache stack.
+//! polling loops, repeated tool schemas), which exact-match already captures
+//! without needing embeddings. (Genuine similarity-based reuse lives one
+//! layer up, in `semantic_cache.rs`, which is careful about exactly the
+//! failure modes a naive embedding cache runs into.)
 //!
 //! The entry cap is enforced from the first commit (a lesson-learned: the main
 //! proxy's L1 grew unbounded and needed `METACACHE_L1_MAX_ENTRIES` bolted on
 //! after the fact). When full we batch-evict the oldest ~10% so eviction cost
 //! is amortized, not paid on every insert.
 
+use crate::answer::AnswerExtract;
 use anyhow::Result;
 use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition};
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,15 @@ pub struct CacheEntry {
     pub tokens_out: u64,
     /// Unix seconds; used for oldest-first eviction.
     pub created_at: i64,
+    /// Plain-text answer extracted at store time, if the response was a clean
+    /// text completion (no tool call). Present so a hit on a *streaming*
+    /// request can be replayed as a synthetic SSE stream even though `body`
+    /// holds the original buffered JSON. `None` for entries written before
+    /// this field existed, or for responses that weren't cleanly extractable
+    /// -- in either case the entry still serves non-streaming hits from
+    /// `body` exactly as before.
+    #[serde(default)]
+    pub answer: Option<AnswerExtract>,
 }
 
 pub struct CacheStore {
@@ -129,6 +139,7 @@ mod tests {
             tokens_in: 10,
             tokens_out: 20,
             created_at: chrono::Utc::now().timestamp(),
+            answer: None,
         }
     }
 

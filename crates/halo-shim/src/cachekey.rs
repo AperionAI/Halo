@@ -32,11 +32,10 @@ pub fn normalize_query_text(text: &str) -> String {
 pub fn request_cache_key(provider: &str, body: &str) -> Option<String> {
     let json: serde_json::Value = serde_json::from_str(body).ok()?;
 
-    // Never serve a streaming request from a buffered cache entry.
-    if json.get("stream").and_then(|v| v.as_bool()) == Some(true) {
-        return None;
-    }
-
+    // Deliberately NOT gated on `stream`: a streamed and non-streamed request
+    // with identical content should share one cache entry. A hit is replayed
+    // as a synthetic SSE stream (`answer::render_stream`) when the request
+    // asked for one -- see `cache::CacheEntry::answer`.
     let model = json.get("model").and_then(|m| m.as_str()).unwrap_or("");
     let mut parts: Vec<String> = vec![format!("provider={provider}"), format!("model={model}")];
 
@@ -69,7 +68,7 @@ pub fn request_cache_key(provider: &str, body: &str) -> Option<String> {
 }
 
 /// Flatten a content value (string, or array of `{type,text}` blocks) to text.
-fn collect_text(v: &serde_json::Value) -> String {
+pub(crate) fn collect_text(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Array(arr) => arr
@@ -119,11 +118,20 @@ mod tests {
     }
 
     #[test]
-    fn streaming_not_cacheable() {
-        let k = request_cache_key(
+    fn streaming_flag_does_not_change_cache_key() {
+        // A streamed and non-streamed request for the same content must
+        // share a cache entry so a prior buffered answer can serve a later
+        // streaming request (replayed as a synthetic SSE stream) and vice
+        // versa.
+        let a = request_cache_key(
             "openai",
             r#"{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hi"}]}"#,
         );
-        assert!(k.is_none());
+        let b = request_cache_key(
+            "openai",
+            r#"{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}"#,
+        );
+        assert!(a.is_some());
+        assert_eq!(a, b);
     }
 }

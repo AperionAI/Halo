@@ -5,13 +5,18 @@
 //! relay runs server-side, kept honest by operating on the exact metadata the
 //! shim recorded.
 
-use halo_common::telemetry::TelemetryEvent;
+use halo_common::telemetry::{PolicyDecision, TelemetryEvent};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default, Clone)]
 pub struct AgentRollup {
     pub requests: u64,
+    /// Exact-match hits (identical, normalized prompt seen before).
     pub cache_hits: u64,
+    /// Semantic hits: a *similar* prompt, possibly answered by a different
+    /// provider originally. Tracked separately from `cache_hits` since it has
+    /// a (tiny) real cost and a different reliability profile.
+    pub semantic_hits: u64,
     pub tokens_in: u64,
     pub tokens_out: u64,
     pub actual_cost: f64,
@@ -46,8 +51,10 @@ pub fn build(events: &[TelemetryEvent], since_secs: Option<i64>) -> Report {
             report.by_model.entry(e.model.clone()).or_default(),
         ] {
             bucket.requests += 1;
-            if e.cache_hit {
-                bucket.cache_hits += 1;
+            match e.policy_decision {
+                PolicyDecision::SemanticCacheHit => bucket.semantic_hits += 1,
+                _ if e.cache_hit => bucket.cache_hits += 1,
+                _ => {}
             }
             bucket.tokens_in += e.tokens_in;
             bucket.tokens_out += e.tokens_out;
@@ -63,14 +70,17 @@ pub fn render(report: &Report) -> String {
     let mut out = String::new();
     let t = &report.total;
     let hit_rate = if t.requests > 0 {
-        100.0 * t.cache_hits as f64 / t.requests as f64
+        100.0 * (t.cache_hits + t.semantic_hits) as f64 / t.requests as f64
     } else {
         0.0
     };
     out.push_str("Smartflow Halo -- local savings report\n");
     out.push_str("======================================\n");
     out.push_str(&format!("Requests:        {}\n", t.requests));
-    out.push_str(&format!("Cache hits:      {} ({hit_rate:.1}%)\n", t.cache_hits));
+    out.push_str(&format!(
+        "Cache hits:      {} exact + {} semantic ({hit_rate:.1}% total)\n",
+        t.cache_hits, t.semantic_hits
+    ));
     out.push_str(&format!("Tokens in/out:   {} / {}\n", t.tokens_in, t.tokens_out));
     out.push_str(&format!("Actual spend:    {}\n", fmt_usd(t.actual_cost)));
     out.push_str(&format!(
@@ -83,11 +93,12 @@ pub fn render(report: &Report) -> String {
         out.push_str("\nBy agent:\n");
         for (agent, r) in &report.by_agent {
             out.push_str(&format!(
-                "  {agent:<20} spend {}  saved {}  ({} reqs, {} hits)\n",
+                "  {agent:<20} spend {}  saved {}  ({} reqs, {} exact + {} semantic hits)\n",
                 fmt_usd(r.actual_cost),
                 fmt_usd(r.savings()),
                 r.requests,
-                r.cache_hits
+                r.cache_hits,
+                r.semantic_hits
             ));
         }
     }

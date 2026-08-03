@@ -25,10 +25,11 @@ pub struct VirtualKeyRecord {
     /// Set when the key has been revoked; a revoked key is rejected at ingress.
     #[serde(default)]
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// Optional custom base URL for OpenAI-compatible endpoints that aren't
-    /// `api.openai.com` -- Groq, Together, Fireworks, a local vLLM/Ollama
-    /// server, etc. all speak the same `/v1/chat/completions` shape. Ignored
-    /// for `Provider::Anthropic`. `#[serde(default)]` keeps this backward
+    /// Optional custom base URL for an endpoint that speaks the same wire
+    /// shape as `provider` but isn't the real `api.openai.com` /
+    /// `api.anthropic.com` -- Groq/Together/Fireworks/a local vLLM/Ollama
+    /// server for OpenAI-shaped traffic, or a Bedrock Anthropic-shape proxy
+    /// for Anthropic-shaped traffic. `#[serde(default)]` keeps this backward
     /// compatible with records written before this field existed.
     #[serde(default)]
     pub base_url: Option<String>,

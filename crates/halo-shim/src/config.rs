@@ -36,6 +36,14 @@ pub struct Config {
     #[serde(default)]
     pub cache: CacheConfig,
 
+    /// The embedding-similarity ("L2") cache. OFF by default -- unlike every
+    /// other cache in Halo, this one spends real (if tiny) money on every
+    /// lookup and every store, since it calls an embeddings API. Turning it
+    /// on requires an explicit opt-in here AND a stored embedding API key
+    /// (`halo embeddings set-key`).
+    #[serde(default)]
+    pub semantic_cache: SemanticCacheConfig,
+
     #[serde(default)]
     pub compression: CompressionConfig,
 
@@ -66,6 +74,7 @@ impl Default for Config {
             relay_token: None,
             budget: BudgetConfig::default(),
             cache: CacheConfig::default(),
+            semantic_cache: SemanticCacheConfig::default(),
             compression: CompressionConfig::default(),
             mcp_servers: Vec::new(),
             price_overrides: Vec::new(),
@@ -133,6 +142,57 @@ impl Default for CacheConfig {
         Self {
             enabled: true,
             max_entries: default_cache_max(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticCacheConfig {
+    /// Off by default -- see the field doc on `Config::semantic_cache`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// "openai" | "ollama" | "mock". Never a local model.
+    #[serde(default = "default_embedding_provider")]
+    pub provider: String,
+    #[serde(default = "default_embedding_model")]
+    pub model: String,
+    /// Required for "ollama" (points at your own already-running server);
+    /// optional override for "openai" (e.g. an OpenAI-compatible proxy).
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Minimum cosine similarity to serve a candidate. High by default: a
+    /// false-positive semantic hit is a wrong answer served silently, so this
+    /// errs conservative. 0.90-0.95 is the typical production range for
+    /// short-form Q&A embeddings.
+    #[serde(default = "default_similarity_threshold")]
+    pub similarity_threshold: f32,
+    /// Hard cap on stored entries, same rationale as `CacheConfig::max_entries`.
+    #[serde(default = "default_semantic_cache_max")]
+    pub max_entries: u64,
+}
+
+fn default_embedding_provider() -> String {
+    "openai".to_string()
+}
+fn default_embedding_model() -> String {
+    "text-embedding-3-small".to_string()
+}
+fn default_similarity_threshold() -> f32 {
+    0.93
+}
+fn default_semantic_cache_max() -> u64 {
+    2_000
+}
+
+impl Default for SemanticCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: default_embedding_provider(),
+            model: default_embedding_model(),
+            base_url: None,
+            similarity_threshold: default_similarity_threshold(),
+            max_entries: default_semantic_cache_max(),
         }
     }
 }
@@ -230,6 +290,9 @@ impl Paths {
     }
     pub fn cache(&self) -> PathBuf {
         self.base.join("cache.redb")
+    }
+    pub fn semantic_cache(&self) -> PathBuf {
+        self.base.join("semantic_cache.redb")
     }
     pub fn audit(&self) -> PathBuf {
         self.base.join("audit.jsonl")

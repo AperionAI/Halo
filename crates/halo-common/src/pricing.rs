@@ -34,6 +34,7 @@ impl ModelPrice {
 pub struct PriceTable {
     entries: Vec<(String, ModelPrice)>,
     fallback: ModelPrice,
+    embedding_fallback: ModelPrice,
 }
 
 impl Default for PriceTable {
@@ -53,6 +54,13 @@ impl Default for PriceTable {
             ("gpt-3.5-turbo", ModelPrice::new(0.50, 1.50, 0.50)),
             ("o1", ModelPrice::new(15.0, 60.0, 7.50)),
             ("o3-mini", ModelPrice::new(1.10, 4.40, 0.55)),
+            // Embedding models (all-input, no output token component). Listed
+            // explicitly so the semantic cache's lookup/store calls get a real
+            // price instead of the chat fallback below, which would overcharge
+            // a tiny embedding call by ~100-1000x.
+            ("text-embedding-3-small", ModelPrice::new(0.02, 0.0, 0.02)),
+            ("text-embedding-3-large", ModelPrice::new(0.13, 0.0, 0.13)),
+            ("text-embedding-ada-002", ModelPrice::new(0.10, 0.0, 0.10)),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
@@ -63,6 +71,11 @@ impl Default for PriceTable {
             // Conservative mid-tier fallback so an unknown model still yields
             // a plausible, non-zero estimate rather than $0.
             fallback: ModelPrice::new(3.0, 15.0, 0.30),
+            // A separate, much cheaper fallback for unrecognized embedding
+            // models (matched by name containing "embed") -- the chat fallback
+            // above would badly overcharge a per-embedding-call cost, which
+            // matters because every semantic-cache lookup and store makes one.
+            embedding_fallback: ModelPrice::new(0.05, 0.0, 0.05),
         }
     }
 }
@@ -80,7 +93,13 @@ impl PriceTable {
                 }
             }
         }
-        best.map(|(_, v)| *v).unwrap_or(self.fallback)
+        best.map(|(_, v)| *v).unwrap_or_else(|| {
+            if m.contains("embed") {
+                self.embedding_fallback
+            } else {
+                self.fallback
+            }
+        })
     }
 
     /// Override or add a model price (used when loading a local override file).
@@ -145,5 +164,21 @@ mod tests {
         let t = PriceTable::default();
         let c = estimate_cost_usd(&t, "some-future-model", 1_000_000, 0, 0);
         assert!(c > 0.0);
+    }
+
+    #[test]
+    fn unknown_embedding_model_uses_cheap_fallback_not_chat_fallback() {
+        let t = PriceTable::default();
+        let c = estimate_cost_usd(&t, "some-future-embedding-model", 1_000_000, 0, 0);
+        // Cheap embedding fallback (0.05/mtok), not the chat fallback (3.0/mtok)
+        // which would overcharge a semantic-cache lookup by 60x.
+        assert!((c - 0.05).abs() < 1e-9, "got {c}");
+    }
+
+    #[test]
+    fn known_embedding_model_resolves_exactly() {
+        let t = PriceTable::default();
+        let c = estimate_cost_usd(&t, "text-embedding-3-small", 1_000_000, 0, 0);
+        assert!((c - 0.02).abs() < 1e-9, "got {c}");
     }
 }

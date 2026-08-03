@@ -12,7 +12,8 @@ name = "halo-relay"
 path = "src/main.rs"
 
 [dependencies]
-halo-common = { path = "../halo-common" }
+# See halo-shim/Cargo.toml for why `version` is required alongside `path`.
+halo-common = { path = "../halo-common", version = "0.2.0" }
 
 tokio.workspace = true
 serde.workspace = true
