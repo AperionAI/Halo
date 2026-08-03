@@ -292,6 +292,7 @@ fn status(paths: Paths) -> Result<()> {
 }
 
 fn report_cmd(paths: Paths, hours: Option<i64>) -> Result<()> {
+    let cfg = Config::load(&paths.config())?;
     let telem = telemetry::Telemetry::new(
         String::new(),
         None,
@@ -301,7 +302,7 @@ fn report_cmd(paths: Paths, hours: Option<i64>) -> Result<()> {
     );
     let events = telem.local_events();
     let since = hours.map(|h| chrono::Utc::now().timestamp() - h * 3600);
-    let r = report::build(&events, since);
+    let r = report::build(&events, since, &cfg.price_table());
     print!("{}", report::render(&r));
     Ok(())
 }
@@ -362,17 +363,7 @@ async fn serve(paths: Paths) -> Result<()> {
         .build()
         .unwrap_or_default();
 
-    let mut prices = halo_common::pricing::PriceTable::default();
-    for o in &cfg.price_overrides {
-        prices.set(
-            &o.model,
-            halo_common::pricing::ModelPrice {
-                input_per_mtok: o.input_per_mtok,
-                output_per_mtok: o.output_per_mtok,
-                cached_input_per_mtok: o.cached_input_per_mtok.unwrap_or(o.input_per_mtok),
-            },
-        );
-    }
+    let prices = cfg.price_table();
 
     let embedder = Arc::new(embeddings::EmbeddingClient::new(
         embeddings::EmbeddingProviderKind::parse(&cfg.semantic_cache.provider),

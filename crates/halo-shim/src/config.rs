@@ -203,13 +203,20 @@ pub struct CompressionConfig {
     /// preserved). On by default.
     #[serde(default = "default_true")]
     pub verbose_phrases: bool,
+    /// Collapse 3+ blank lines to 2 and strip trailing line whitespace. Never
+    /// touches leading whitespace/indentation, so it can't corrupt
+    /// indentation-sensitive pasted content. On by default -- meaning cannot
+    /// change either way.
+    #[serde(default = "default_true")]
+    pub whitespace: bool,
     /// Aggressive single-word/symbol abbreviations (e.g. "and" -> "&"). OFF by
     /// default: these can change meaning, and Halo's rule is never to degrade
     /// output silently.
     #[serde(default)]
     pub aggressive_abbreviations: bool,
     /// Inject Anthropic `cache_control` breakpoints on large/repeated system
-    /// prompts.
+    /// prompts, tool definitions, and the first message's attachment-shaped
+    /// content blocks (documents/images/large text).
     #[serde(default = "default_true")]
     pub anthropic_cache_control: bool,
 }
@@ -222,6 +229,7 @@ impl Default for CompressionConfig {
     fn default() -> Self {
         Self {
             verbose_phrases: true,
+            whitespace: true,
             aggressive_abbreviations: false,
             anthropic_cache_control: true,
         }
@@ -317,5 +325,24 @@ impl Config {
         let raw = std::fs::read_to_string(path)?;
         let cfg: Config = serde_yaml::from_str(&raw)?;
         Ok(cfg)
+    }
+
+    /// Build the effective price table: built-in defaults with
+    /// `price_overrides` applied on top. Shared by `serve` (live billing)
+    /// and `report`/`status` (offline recompute) so both use identically
+    /// priced numbers.
+    pub fn price_table(&self) -> halo_common::pricing::PriceTable {
+        let mut prices = halo_common::pricing::PriceTable::default();
+        for o in &self.price_overrides {
+            prices.set(
+                &o.model,
+                halo_common::pricing::ModelPrice {
+                    input_per_mtok: o.input_per_mtok,
+                    output_per_mtok: o.output_per_mtok,
+                    cached_input_per_mtok: o.cached_input_per_mtok.unwrap_or(o.input_per_mtok),
+                },
+            );
+        }
+        prices
     }
 }

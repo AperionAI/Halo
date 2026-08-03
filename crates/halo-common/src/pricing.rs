@@ -132,6 +132,67 @@ pub fn estimate_cost_usd(
     in_cost + cached_cost + out_cost
 }
 
+/// A single call's savings, split into where they came from.
+///
+/// The point of the split: Halo's own L1 (exact) / L2 (semantic) cache only
+/// pays off on a *repeated* prompt. Compression and the provider's own
+/// prompt-cache discount (Anthropic `cache_control`, OpenAI's automatic
+/// prefix caching) both apply on every single call, hit or not -- including
+/// the very first request Halo ever sees for a given agent. That's the
+/// "baseline" a low/zero Halo-cache-hit-rate deployment still gets, and it's
+/// worth reporting separately from hit-driven savings rather than folding
+/// everything into one "estimated saved" number that looks unimpressive (or
+/// suspiciously flat) when hit rate happens to be low.
+///
+/// The three cost figures always satisfy
+/// `counterfactual_cost == actual_cost + compression_savings + provider_cache_savings`
+/// for a live (non-Halo-cache-hit) call. For a Halo cache-hit event, callers
+/// pass `compression_ratio: 1.0, tokens_cached: 0` (the hit's own request
+/// carried neither), so both fields naturally come out `0.0` and the whole
+/// `counterfactual - actual` gap is correctly left as pure hit savings --
+/// no special-casing needed at the call site.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SavingsBreakdown {
+    pub actual_cost: f64,
+    /// What this call would have cost with no compression and no provider
+    /// prompt-cache discount -- the same figure `estimate_cost_usd` would
+    /// have produced applied to the pre-compression token count.
+    pub counterfactual_cost: f64,
+    /// Portion of the gap attributable to sending fewer input tokens than
+    /// the uncompressed prompt would have needed.
+    pub compression_savings: f64,
+    /// Portion of the gap attributable to the provider's own prompt-cache
+    /// discount on `tokens_cached` of the (already compressed) input.
+    pub provider_cache_savings: f64,
+}
+
+/// Decompose one call's cost into actual spend plus the two savings sources
+/// that apply independent of Halo's own request/response cache. See
+/// [`SavingsBreakdown`] for why this split exists.
+pub fn decompose_savings(
+    table: &PriceTable,
+    model: &str,
+    tokens_in: u64,
+    tokens_out: u64,
+    tokens_cached: u64,
+    compression_ratio: f64,
+) -> SavingsBreakdown {
+    let uncompressed_in = if compression_ratio > 0.0 && compression_ratio < 1.0 {
+        (tokens_in as f64 / compression_ratio).round() as u64
+    } else {
+        tokens_in
+    };
+    let counterfactual_cost = estimate_cost_usd(table, model, uncompressed_in, tokens_out, 0);
+    let compressed_no_provider_cache = estimate_cost_usd(table, model, tokens_in, tokens_out, 0);
+    let actual_cost = estimate_cost_usd(table, model, tokens_in, tokens_out, tokens_cached);
+    SavingsBreakdown {
+        actual_cost,
+        counterfactual_cost,
+        compression_savings: (counterfactual_cost - compressed_no_provider_cache).max(0.0),
+        provider_cache_savings: (compressed_no_provider_cache - actual_cost).max(0.0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +241,37 @@ mod tests {
         let t = PriceTable::default();
         let c = estimate_cost_usd(&t, "text-embedding-3-small", 1_000_000, 0, 0);
         assert!((c - 0.02).abs() < 1e-9, "got {c}");
+    }
+
+    #[test]
+    fn decompose_breakdown_sums_to_total_savings() {
+        let t = PriceTable::default();
+        let b = decompose_savings(&t, "gpt-4o", 500, 200, 100, 0.5);
+        let total_savings = b.counterfactual_cost - b.actual_cost;
+        assert!((b.compression_savings + b.provider_cache_savings - total_savings).abs() < 1e-9);
+        assert!(b.compression_savings > 0.0);
+        assert!(b.provider_cache_savings > 0.0);
+    }
+
+    #[test]
+    fn decompose_no_compression_no_provider_cache_is_all_zero() {
+        let t = PriceTable::default();
+        let b = decompose_savings(&t, "gpt-4o", 500, 200, 0, 1.0);
+        assert_eq!(b.compression_savings, 0.0);
+        assert_eq!(b.provider_cache_savings, 0.0);
+        assert!((b.counterfactual_cost - b.actual_cost).abs() < 1e-12);
+    }
+
+    #[test]
+    fn decompose_cache_hit_shape_attributes_nothing_to_baseline() {
+        // A Halo exact/semantic cache-hit event is billed with
+        // compression_ratio: 1.0, tokens_cached: 0 (its own request carried
+        // neither) -- the entire gap must fall through as pure hit savings,
+        // not get miscounted as compression or provider-cache savings.
+        let t = PriceTable::default();
+        let b = decompose_savings(&t, "gpt-4o", 1000, 500, 0, 1.0);
+        assert_eq!(b.compression_savings, 0.0);
+        assert_eq!(b.provider_cache_savings, 0.0);
+        assert_eq!(b.actual_cost, b.counterfactual_cost);
     }
 }

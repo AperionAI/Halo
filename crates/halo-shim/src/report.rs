@@ -5,6 +5,7 @@
 //! relay runs server-side, kept honest by operating on the exact metadata the
 //! shim recorded.
 
+use halo_common::pricing::{decompose_savings, PriceTable};
 use halo_common::telemetry::{PolicyDecision, TelemetryEvent};
 use std::collections::BTreeMap;
 
@@ -21,11 +22,31 @@ pub struct AgentRollup {
     pub tokens_out: u64,
     pub actual_cost: f64,
     pub counterfactual_cost: f64,
+    /// Sum of [`halo_common::pricing::SavingsBreakdown::compression_savings`]
+    /// across every event -- recomputed from each event's own
+    /// tokens/compression_ratio, not trusted from a stored dollar figure.
+    pub compression_savings: f64,
+    /// Sum of `provider_cache_savings` -- the Anthropic/OpenAI prompt-cache
+    /// discount, independent of whether Halo's own cache ever hit.
+    pub provider_cache_savings: f64,
 }
 
 impl AgentRollup {
     pub fn savings(&self) -> f64 {
         (self.counterfactual_cost - self.actual_cost).max(0.0)
+    }
+
+    /// Savings that apply on every call, hit or not: compression +
+    /// provider-native prompt caching. This is the floor a deployment still
+    /// gets even at a 0% Halo cache-hit rate.
+    pub fn baseline_savings(&self) -> f64 {
+        self.compression_savings + self.provider_cache_savings
+    }
+
+    /// The remainder attributable specifically to a Halo L1/exact or L2/
+    /// semantic cache hit (never calling the provider at all).
+    pub fn hit_savings(&self) -> f64 {
+        (self.savings() - self.baseline_savings()).max(0.0)
     }
 }
 
@@ -37,7 +58,14 @@ pub struct Report {
 }
 
 /// Roll up events optionally filtered to those on/after `since` (unix secs).
-pub fn build(events: &[TelemetryEvent], since_secs: Option<i64>) -> Report {
+///
+/// `prices` is used only to re-split each event's already-computed
+/// actual/counterfactual gap into compression vs. provider-cache portions
+/// (see [`halo_common::pricing::decompose_savings`]) -- it does not change
+/// the event's own recorded `estimated_cost`/`counterfactual_cost`, so a
+/// stale local `price_overrides` config can shift the baseline/hit split
+/// slightly but never the headline "Estimated saved" total.
+pub fn build(events: &[TelemetryEvent], since_secs: Option<i64>, prices: &PriceTable) -> Report {
     let mut report = Report::default();
     for e in events {
         if let Some(s) = since_secs {
@@ -45,6 +73,14 @@ pub fn build(events: &[TelemetryEvent], since_secs: Option<i64>) -> Report {
                 continue;
             }
         }
+        let breakdown = decompose_savings(
+            prices,
+            &e.model,
+            e.tokens_in,
+            e.tokens_out,
+            e.tokens_cached,
+            e.compression_ratio,
+        );
         for bucket in [
             &mut report.total,
             report.by_agent.entry(e.agent_id.clone()).or_default(),
@@ -60,6 +96,8 @@ pub fn build(events: &[TelemetryEvent], since_secs: Option<i64>) -> Report {
             bucket.tokens_out += e.tokens_out;
             bucket.actual_cost += e.estimated_cost;
             bucket.counterfactual_cost += e.counterfactual_cost;
+            bucket.compression_savings += breakdown.compression_savings;
+            bucket.provider_cache_savings += breakdown.provider_cache_savings;
         }
     }
     report
@@ -84,10 +122,20 @@ pub fn render(report: &Report) -> String {
     out.push_str(&format!("Tokens in/out:   {} / {}\n", t.tokens_in, t.tokens_out));
     out.push_str(&format!("Actual spend:    {}\n", fmt_usd(t.actual_cost)));
     out.push_str(&format!(
-        "Would-have cost: {}  (no cache, no compression)\n",
+        "Would-have cost: {}  (no cache, no compression, no provider prompt-cache)\n",
         fmt_usd(t.counterfactual_cost)
     ));
     out.push_str(&format!("Estimated saved: {}\n", fmt_usd(t.savings())));
+    out.push_str(&format!(
+        "  of which baseline (compression {} + provider cache {}): {}  -- applies even at 0% hit rate\n",
+        fmt_usd(t.compression_savings),
+        fmt_usd(t.provider_cache_savings),
+        fmt_usd(t.baseline_savings())
+    ));
+    out.push_str(&format!(
+        "  of which from Halo cache hits (exact/semantic):        {}\n",
+        fmt_usd(t.hit_savings())
+    ));
 
     if !report.by_agent.is_empty() {
         out.push_str("\nBy agent:\n");
@@ -165,10 +213,35 @@ mod tests {
             ev("a", "gpt-4o", 0.0, 0.10, true),
             ev("b", "gpt-4o-mini", 0.02, 0.05, false),
         ];
-        let r = build(&events, None);
+        let r = build(&events, None, &PriceTable::default());
         assert_eq!(r.total.requests, 3);
         assert_eq!(r.total.cache_hits, 1);
         assert!((r.total.savings() - 0.13).abs() < 1e-9);
         assert_eq!(r.by_agent.len(), 2);
+    }
+
+    #[test]
+    fn baseline_savings_split_from_hit_savings() {
+        let prices = PriceTable::default();
+        // A live (non-hit) call with real compression + provider cache
+        // discount baked into its token fields.
+        let mut live = ev("a", "gpt-4o", 0.0, 0.0, false);
+        live.tokens_in = 500;
+        live.tokens_out = 200;
+        live.tokens_cached = 100;
+        live.compression_ratio = 0.5;
+        live.estimated_cost = halo_common::pricing::estimate_cost_usd(&prices, "gpt-4o", 500, 200, 100);
+        live.counterfactual_cost = halo_common::pricing::estimate_cost_usd(&prices, "gpt-4o", 1000, 200, 0);
+
+        // A genuine Halo cache hit: zero cost, no compression/provider-cache
+        // fields set on its own account.
+        let hit = ev("a", "gpt-4o", 0.0, 0.05, true);
+
+        let r = build(&[live, hit], None, &prices);
+        let a = &r.by_agent["a"];
+        assert!(a.compression_savings > 0.0, "expected nonzero compression savings");
+        assert!(a.provider_cache_savings > 0.0, "expected nonzero provider-cache savings");
+        assert!(a.hit_savings() > 0.0, "expected nonzero hit savings from the cache-hit event");
+        assert!((a.baseline_savings() + a.hit_savings() - a.savings()).abs() < 1e-9);
     }
 }

@@ -72,10 +72,24 @@ semantic_cache:
 compression:
   # Safe, meaning-preserving multi-word reductions. On by default.
   verbose_phrases: true
+  # Collapse 3+ blank lines to 2 and strip trailing line whitespace. Never
+  # touches leading whitespace/indentation (safe for pasted code/YAML/lists).
+  # On by default -- meaning cannot change either way.
+  whitespace: true
   # Aggressive single-word/symbol abbreviations (e.g. "and" -> "&"). These can
   # change meaning, so they are strictly opt-in.
   aggressive_abbreviations: false
-  # Inject Anthropic cache_control breakpoints on large/repeated system prompts.
+  # Inject Anthropic cache_control breakpoints on:
+  #   * the system prompt,
+  #   * the `tools` definitions (often the largest, most stable block),
+  #   * the first message's attachment-shaped content (a pasted document,
+  #     screenshot, or RAG context block that precedes the per-turn question).
+  # Each fires when the block is either large on its own (>=4000 chars) or
+  # smaller-but-seen 3+ times this process (>=2000 chars) -- same heuristic
+  # as the main Smartflow proxy's `prompt_cache_injector.rs`, extended to
+  # cover tools/attachments, which it doesn't. This is pure request-shaping;
+  # OpenAI caches automatically and needs no injection. No effect unless the
+  # served model actually honors Anthropic prompt caching.
   anthropic_cache_control: true
 
 # MCP servers Halo fronts. Point your agent runtime's MCP config at Halo

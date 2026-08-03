@@ -216,3 +216,74 @@ live testing are fixed and covered by regression tests
 (`counterfactual::tests::semantic_cache_hit_trusts_reported_embedding_cost_not_zero`,
 `state.rs`'s override-precedence logic). Remaining scope line for v1.2:
 multi-turn semantic matching (see README).
+
+## v1.1.1: compression baseline + provider prompt-cache extension
+
+Prompted by: does Halo have a "floor" of savings that holds even when its own
+cache-hit rate is low, the way the main Smartflow proxy claims to via
+compression and provider prompt-cache flagging? A code review of the main
+proxy (`src/semantic_compression.rs`, `src/prompt_cache_injector.rs`,
+`src/metacache_api_routes.rs`) found:
+
+- The main proxy's semantic-concept compression **resolves references back to
+  full text before the provider ever sees the body** (`proxy_handler.rs`) —
+  its reported "tokens saved" aren't real wire savings. Halo's compression
+  was already designed to avoid this trap (see `compress.rs`'s module doc);
+  this pass adds one more safe technique it was missing: whitespace/blank-line
+  collapsing, ported from `metacache_api_routes.rs::optimize_whitespace` with
+  one change — Halo never trims *leading* whitespace, since the main proxy's
+  version would silently corrupt indentation-sensitive pasted content
+  (Python, YAML, nested Markdown lists). Blank-line collapsing and
+  trailing-whitespace stripping can't change meaning in any language, so both
+  are on by default.
+- The main proxy's `PromptCacheInjector` only ever pins the **system**
+  prompt. Nothing in the codebase pins `tools` definitions or message
+  content, even though both commonly carry the same large, stable,
+  turn-over-turn-repeated shape a system prompt does (a big tool catalog; a
+  pasted document or screenshot ahead of the per-turn question). Halo's
+  `cache_control.rs` now covers all three, reusing the same
+  size-or-repetition heuristic (>=4000 chars unconditional, >=2000 chars +
+  seen 3x this process) the main proxy already validated for the system-only
+  case.
+
+**A real placement bug was caught by live smoke testing, not unit tests**:
+the first implementation of the first-message breakpoint pinned the content
+array's *literal last block*. For the common `[attachment, question]` shape
+that's exactly backwards — the last block is the part that legitimately
+varies every call, so a breakpoint there can never actually be reused (proof:
+a live mock-Anthropic smoke test showed `cache_creation` on every call with a
+different question, never `cache_read`). Fixed by excluding the array's last
+block from the stable/hashed/pinned candidate set (`stable_prefix_len`),
+pinning the second-to-last block instead — verified via the same smoke test
+subsequently showing `cache_read_input_tokens` on the 2nd and 3rd calls
+despite each having a different trailing question:
+
+```
+request 1 (new doc+tools):  cache_creation_input_tokens: 4000
+request 2 (same doc/tools, different question): cache_read_input_tokens: 4000
+request 3 (same doc/tools, different question): cache_read_input_tokens: 4000
+```
+
+**Savings accounting**: added `halo_common::pricing::decompose_savings`,
+splitting each call's `counterfactual - actual` gap into
+`compression_savings` and `provider_cache_savings`, purely by recomputing
+from already-stored fields (`tokens_in/out/cached`, `compression_ratio`,
+`model`) — no `TelemetryEvent` schema change, so old JSONL/SQLite rows
+recompute identically once re-read. Both `halo report` (shim, offline) and
+the relay's `summary()` (canonical, server-side) now report this split
+alongside the existing hit-rate-driven "Estimated saved" total. A Halo
+cache-hit event's own token fields (`compression_ratio: 1.0, tokens_cached:
+0`, set at the point the hit is recorded) make it fall through to the
+existing "hit savings" bucket automatically — no per-decision special case
+needed in the new code. Live-verified end to end: 3 requests against the
+same mock server, 0% Halo cache hit rate (each had a different question, so
+neither the exact nor semantic cache could hit), still reported a non-zero
+baseline:
+
+```
+Requests:        3
+Cache hits:      0 exact + 0 semantic (0.0% total)
+Estimated saved: $0.0260
+  of which baseline (compression $0.0044 + provider cache $0.0216): $0.0260  -- applies even at 0% hit rate
+  of which from Halo cache hits (exact/semantic):        $0.0000
+```

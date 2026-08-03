@@ -4,7 +4,9 @@ A lightweight, standalone governance proxy for **self-hosted AI agents**. Halo
 sits between your agent runtime and the model providers (and your MCP servers),
 so you can:
 
-- **See the bill** — per-agent, per-model spend and a real COGS/savings number.
+- **See the bill** — per-agent, per-model spend and a real COGS/savings number,
+  split into what came from Halo's own cache vs. a baseline that holds even
+  when that cache never hits (see "Compression & provider prompt-cache" below).
 - **Cut the obvious waste** — exact-match response cache + prompt compression.
 - **Never get a runaway invoice** — local token/spend budgets with a hard-cap
   kill switch that works even fully offline.
@@ -104,6 +106,34 @@ internally and, at the seam, reuses Shield's:
   scrubs any leaked secret values out of results before your agent sees them.
 - **taint** — credential-shape detection flags raw secrets heading to a tool or
   echoed back by one, recorded (kinds only) in the audit log.
+
+### Compression & provider prompt-cache (on by default)
+
+Every request gets two savings mechanisms that apply whether or not Halo's
+own cache ever hits — the floor a deployment gets even at a 0% cache-hit rate:
+
+- **Compression that survives to the wire.** Verbose-phrase reduction (`"In
+  order to"` -> `"To"`, ported from the main Smartflow proxy's phrase table)
+  and whitespace collapsing (blank-line runs, trailing spaces — never
+  leading/indentation, so pasted code/YAML/lists can't be corrupted) both
+  genuinely shrink the outbound body. Aggressive single-word abbreviations
+  (`"and"` -> `"&"`) exist but are opt-in (`compression.aggressive_abbreviations`)
+  since they can change meaning.
+- **Anthropic `cache_control` breakpoints**, injected on the system prompt,
+  `tools` definitions, and the first message's attachment-shaped content
+  (a pasted document, screenshot, or RAG context block ahead of the per-turn
+  question) whenever a block is large (>=4000 chars) or smaller-but-repeated
+  (>=2000 chars, seen 3+ times this process). This is the "flip the cache
+  flag when we see repetitive data or attachments" behavior, extended beyond
+  the main proxy's system-prompt-only version (confirmed via code review) to
+  also cover tools and attachments — the two other places a large, stable
+  block commonly recurs turn to turn. OpenAI caches its own prompt prefix
+  automatically; Halo just parses `cached_tokens` off the response.
+
+`halo report` and the relay dashboard split savings into this baseline
+(compression + provider cache) vs. hit-driven savings (Halo's own exact/
+semantic cache), so a low Halo-cache-hit-rate deployment doesn't look
+misleadingly unimpressive — see `docs/DESIGN_REVIEW.md` for the accounting.
 
 ### Semantic cache (cross-provider, off by default)
 

@@ -6,7 +6,7 @@
 
 use crate::counterfactual::{canonical, EventFacts};
 use anyhow::Result;
-use halo_common::pricing::PriceTable;
+use halo_common::pricing::{decompose_savings, PriceTable};
 use halo_common::telemetry::{PolicyDecision, TelemetryEvent};
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -124,6 +124,19 @@ impl Store {
                     reported_cost: row.reported_cost,
                 },
             );
+            // Re-split the same raw token fields into compression vs.
+            // provider-prompt-cache savings, independent of `canonical`'s
+            // per-decision actual-cost overrides (see `decompose_savings`
+            // doc comment for why a cache-hit's own token fields already
+            // zero this out correctly without needing a special case here).
+            let breakdown = decompose_savings(
+                &self.prices,
+                &row.model,
+                row.tokens_in,
+                row.tokens_out,
+                row.tokens_cached,
+                row.compression_ratio,
+            );
             for bucket in [
                 &mut summary.total,
                 summary.by_agent.entry(row.agent.clone()).or_default(),
@@ -137,6 +150,8 @@ impl Store {
                 bucket.tokens_out += row.tokens_out;
                 bucket.actual_cost += actual;
                 bucket.counterfactual_cost += counter;
+                bucket.compression_savings += breakdown.compression_savings;
+                bucket.provider_cache_savings += breakdown.provider_cache_savings;
             }
         }
         summary.finalize();
@@ -181,11 +196,19 @@ pub struct Rollup {
     pub actual_cost: f64,
     pub counterfactual_cost: f64,
     pub savings: f64,
+    /// Savings from compression + provider prompt-cache -- applies on every
+    /// call, hit or not. See `halo_common::pricing::SavingsBreakdown`.
+    pub compression_savings: f64,
+    pub provider_cache_savings: f64,
+    /// `savings` minus the two fields above: the remainder specifically
+    /// attributable to a Halo cache hit never calling the provider.
+    pub hit_savings: f64,
 }
 
 impl Rollup {
     fn finalize(&mut self) {
         self.savings = (self.counterfactual_cost - self.actual_cost).max(0.0);
+        self.hit_savings = (self.savings - self.compression_savings - self.provider_cache_savings).max(0.0);
     }
 }
 

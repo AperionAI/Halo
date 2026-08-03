@@ -207,6 +207,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             &outbound,
             st.cfg.compression.verbose_phrases,
             st.cfg.compression.aggressive_abbreviations,
+            st.cfg.compression.whitespace,
         );
         compression_ratio = c.ratio;
         if let Some(b) = c.body {
@@ -214,7 +215,11 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         }
         if matches!(kind, ApiKind::AnthropicMessages) && st.cfg.compression.anthropic_cache_control {
             if let Some(inj) = st.injector.process_anthropic(&outbound) {
-                tracing::debug!(warm = inj.warm, "injected anthropic cache_control breakpoint");
+                tracing::debug!(
+                    breakpoints = inj.breakpoints,
+                    warm = inj.warm,
+                    "injected anthropic cache_control breakpoint(s)"
+                );
                 outbound = inj.body;
             }
         }

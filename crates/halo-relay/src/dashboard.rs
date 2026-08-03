@@ -15,6 +15,8 @@ pub const HTML: &str = r#"<!doctype html>
   .sub { color:var(--muted); font-size:13px; margin-top:4px; }
   main { max-width:1000px; margin:0 auto; padding:28px 32px; }
   .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:28px; }
+  .cards2 { display:grid; grid-template-columns:repeat(2,1fr); gap:16px; margin-bottom:28px; }
+  .card .sub { color:var(--muted); font-size:12px; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:18px; }
   .card .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.6px; }
   .card .value { font-size:26px; font-weight:650; margin-top:8px; }
@@ -50,6 +52,10 @@ pub const HTML: &str = r#"<!doctype html>
     <div class="card"><div class="label">Requests</div><div class="value" id="reqs">—</div></div>
     <div class="card"><div class="label">Cache hit rate</div><div class="value" id="hit">—</div></div>
   </div>
+  <div class="cards2">
+    <div class="card savings"><div class="label">Baseline saved (compression + provider cache)</div><div class="value" id="baseline">—</div><div class="sub" style="margin-top:6px">Applies even at 0% Halo cache hit rate</div></div>
+    <div class="card savings"><div class="label">Cache-hit saved</div><div class="value" id="hitsaved">—</div><div class="sub" style="margin-top:6px">From Halo's own exact/semantic cache</div></div>
+  </div>
   <h2>By agent</h2>
   <table><thead><tr><th>Agent</th><th class="num">Requests</th><th class="num">Hits</th><th class="num">Spend</th><th class="num">Saved</th></tr></thead><tbody id="agents"></tbody></table>
   <h2>By model</h2>
@@ -67,6 +73,8 @@ async function load() {
   document.getElementById('reqs').textContent = (t.requests||0).toLocaleString();
   const hit = t.requests ? (100*t.cache_hits/t.requests) : 0;
   document.getElementById('hit').textContent = hit.toFixed(1) + '%';
+  document.getElementById('baseline').textContent = usd((t.compression_savings||0) + (t.provider_cache_savings||0));
+  document.getElementById('hitsaved').textContent = usd(t.hit_savings);
   const ab = document.getElementById('agents'); ab.innerHTML='';
   (d.by_agent||[]).forEach(a => {
     ab.innerHTML += `<tr><td>${a.name}</td><td class="num">${a.requests}</td><td class="num">${a.cache_hits}</td><td class="num money">${usd(a.actual_cost)}</td><td class="num">${usd(a.savings)}</td></tr>`;

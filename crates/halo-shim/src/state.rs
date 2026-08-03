@@ -10,7 +10,7 @@ use crate::keys::KeyStore;
 use crate::mcp::McpManager;
 use crate::semantic_cache::SemanticCacheStore;
 use crate::telemetry::Telemetry;
-use halo_common::pricing::{estimate_cost_usd, PriceTable};
+use halo_common::pricing::{decompose_savings, estimate_cost_usd, PriceTable};
 use halo_common::telemetry::{PolicyDecision, Provider, TelemetryEvent};
 use std::sync::{Arc, Mutex};
 
@@ -71,13 +71,20 @@ impl AppState {
             (_, None) => estimate_cost_usd(&self.prices, &o.model, o.tokens_in, o.tokens_out, o.tokens_cached),
         };
         // Counterfactual: no provider cache discount and no compression --
-        // what this would have cost without either optimization.
-        let uncompressed_in = if o.compression_ratio > 0.0 && o.compression_ratio < 1.0 {
-            (o.tokens_in as f64 / o.compression_ratio).round() as u64
-        } else {
-            o.tokens_in
-        };
-        let counterfactual_cost = estimate_cost_usd(&self.prices, &o.model, uncompressed_in, o.tokens_out, 0);
+        // what this would have cost without either optimization. Computed
+        // via the shared decomposition helper so `halo report`/the relay can
+        // later split this same gap into compression vs. provider-cache
+        // portions from the raw token fields alone, without needing this
+        // event to carry pre-split dollar amounts.
+        let counterfactual_cost = decompose_savings(
+            &self.prices,
+            &o.model,
+            o.tokens_in,
+            o.tokens_out,
+            o.tokens_cached,
+            o.compression_ratio,
+        )
+        .counterfactual_cost;
 
         if o.record_spend && actual_cost > 0.0 {
             let _ = self.ledger.record(&o.agent, actual_cost);
