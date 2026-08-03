@@ -117,6 +117,18 @@ fn extract_vkey(headers: &HeaderMap) -> Option<String> {
     None
 }
 
+/// Optional `X-Halo-Subject` sub-identity for cost attribution. Trimmed,
+/// length-capped (defence against a client stuffing content into it -- this is
+/// metadata, never content), and empty -> `None`.
+fn extract_subject(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-halo-subject")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(128).collect())
+}
+
 /// Extract (tokens_in, tokens_out, tokens_cached) from a non-streamed
 /// provider response body.
 fn parse_usage(provider: Provider, json: &Value) -> (u64, u64, u64) {
@@ -185,8 +197,20 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
     let agent = record.agent_id.clone();
+    // Best-effort remote kill: an operator revoked this agent from the relay.
+    // The always-local key revocation above is the primary control; this only
+    // ever adds to it.
+    if st.remote_revocations.is_revoked(&agent) {
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "agent remotely revoked (killed from the relay)",
+        );
+    }
     let provider = record.provider;
     let provider_str = provider.as_str();
+    // Optional sub-identity hint (channel/sub-agent/thread) for cost
+    // attribution when one process/key fans out across many channels.
+    let subject = extract_subject(&headers);
     let original: Option<Value> = serde_json::from_str(&body).ok();
     let model = original
         .as_ref()
@@ -266,6 +290,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
                 };
                 st.finalize_llm_call(LlmOutcome {
                     agent: agent.clone(),
+                    subject: subject.clone(),
                     provider,
                     model: entry.model.clone(),
                     tokens_in: entry.tokens_in,
@@ -306,8 +331,10 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         .check(&agent, projected, caps)
         .unwrap_or(BudgetVerdict::Allow);
     if let BudgetVerdict::HardBlock { scope, spent, cap } = &verdict {
+        st.maybe_alert_budget(&agent, &verdict);
         st.finalize_llm_call(LlmOutcome {
             agent: agent.clone(),
+            subject: subject.clone(),
             provider,
             model: model.clone(),
             tokens_in: 0,
@@ -332,6 +359,9 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         );
     }
     let soft_warned = matches!(verdict, BudgetVerdict::SoftWarn { .. });
+    if soft_warned {
+        st.maybe_alert_budget(&agent, &verdict);
+    }
 
     // 4.5 Semantic (embedding-similarity) cache. Only reached once the
     // hard-cap check above has passed, so an already-blocked agent never
@@ -383,6 +413,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
                             }));
                             st.finalize_llm_call(LlmOutcome {
                                 agent: agent.clone(),
+                                subject: subject.clone(),
                                 provider,
                                 model: model.clone(),
                                 tokens_in,
@@ -409,6 +440,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
                             // recomputing from the model-name price table.
                             st.finalize_llm_call(LlmOutcome {
                                 agent: agent.clone(),
+                                subject: subject.clone(),
                                 provider,
                                 model: st.embedder.model.clone(),
                                 tokens_in: er.tokens,
@@ -467,6 +499,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             let err_class = if e.is_timeout() { "timeout" } else { "transport" };
             st.finalize_llm_call(LlmOutcome {
                 agent: agent.clone(),
+                subject: subject.clone(),
                 provider,
                 model: model.clone(),
                 tokens_in: 0,
@@ -496,6 +529,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         return stream_response(
             st,
             agent,
+            subject,
             provider,
             model,
             kind.task_class().to_string(),
@@ -544,6 +578,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
 
     st.finalize_llm_call(LlmOutcome {
         agent: agent.clone(),
+        subject: subject.clone(),
         provider,
         model: effective_model.clone(),
         tokens_in,
@@ -614,6 +649,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
 async fn stream_response(
     st: AppState,
     agent: String,
+    subject: Option<String>,
     provider: Provider,
     fallback_model: String,
     task_class: String,
@@ -689,6 +725,7 @@ async fn stream_response(
         };
         st.finalize_llm_call(LlmOutcome {
             agent: agent.clone(),
+            subject: subject.clone(),
             provider,
             model: model.clone(),
             tokens_in,

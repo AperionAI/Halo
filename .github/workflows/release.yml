@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "halo-v*"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  binaries:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            linker: gcc-aarch64-linux-gnu
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross linker (aarch64 linux)
+        if: matrix.linker != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.linker }}
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Build release binaries
+        run: cargo build --release --target ${{ matrix.target }} --bin halo --bin halo-relay
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          DIST="halo-${{ matrix.target }}"
+          mkdir -p "$DIST"
+          cp "target/${{ matrix.target }}/release/halo" "$DIST/"
+          cp "target/${{ matrix.target }}/release/halo-relay" "$DIST/"
+          cp README.md LICENSE config/halo.example.yaml "$DIST/"
+          tar -czf "${DIST}.tar.gz" "$DIST"
+          shasum -a 256 "${DIST}.tar.gz" > "${DIST}.tar.gz.sha256"
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Dist = "halo-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path $Dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/halo.exe" $Dist
+          Copy-Item "target/${{ matrix.target }}/release/halo-relay.exe" $Dist
+          Copy-Item README.md,LICENSE,config/halo.example.yaml $Dist
+          Compress-Archive -Path $Dist -DestinationPath "$Dist.zip"
+          (Get-FileHash "$Dist.zip" -Algorithm SHA256).Hash.ToLower() | Out-File "$Dist.zip.sha256"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            halo-${{ matrix.target }}.tar.gz
+            halo-${{ matrix.target }}.tar.gz.sha256
+            halo-${{ matrix.target }}.zip
+            halo-${{ matrix.target }}.zip.sha256
+          fail_on_unmatched_files: false
+
+  docker:
+    name: docker (GHCR)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=match,pattern=halo-v(.*),group=1
+            type=raw,value=latest
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

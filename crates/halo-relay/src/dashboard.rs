@@ -27,8 +27,13 @@ pub const HTML: &str = r#"<!doctype html>
   tr:last-child td { border-bottom:none; }
   td.num { text-align:right; }
   .money { color:var(--teal); }
-  select { background:var(--card); color:var(--ink); border:1px solid var(--border); border-radius:8px; padding:6px 10px; }
+  select,input { background:var(--card); color:var(--ink); border:1px solid var(--border); border-radius:8px; padding:6px 10px; }
   h2 { font-size:14px; color:var(--muted); text-transform:uppercase; letter-spacing:.6px; margin:24px 0 10px; }
+  button { background:var(--card); color:var(--ink); border:1px solid var(--border); border-radius:8px; padding:6px 12px; cursor:pointer; }
+  button.danger { border-color:#b4404a; color:#ff9ba3; }
+  button:hover { border-color:var(--teal); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+  .kill-msg { color:var(--muted); font-size:13px; min-height:18px; }
 </style>
 </head>
 <body>
@@ -60,6 +65,23 @@ pub const HTML: &str = r#"<!doctype html>
   <table><thead><tr><th>Agent</th><th class="num">Requests</th><th class="num">Hits</th><th class="num">Spend</th><th class="num">Saved</th></tr></thead><tbody id="agents"></tbody></table>
   <h2>By model</h2>
   <table><thead><tr><th>Model</th><th class="num">Requests</th><th class="num">Spend</th><th class="num">Saved</th></tr></thead><tbody id="models"></tbody></table>
+
+  <div id="subjectSection" style="display:none">
+    <h2>By subject (channel / sub-agent)</h2>
+    <table><thead><tr><th>Subject</th><th class="num">Requests</th><th class="num">Hits</th><th class="num">Spend</th><th class="num">Saved</th></tr></thead><tbody id="subjects"></tbody></table>
+  </div>
+
+  <h2>Remote kill</h2>
+  <div class="sub" style="margin-bottom:12px">Revoke an agent fleet-wide (leave device blank) or on one device. Shims refuse a revoked agent on their next poll (~30s). This is a best-effort backstop; each shim's local hard-cap kill switch is always authoritative. Mutations require the relay bearer token.</div>
+  <div class="row">
+    <input id="k_agent" placeholder="agent id" size="16"/>
+    <input id="k_device" placeholder="device id (blank = all)" size="22"/>
+    <input id="k_token" type="password" placeholder="relay bearer token" size="22"/>
+    <button class="danger" onclick="doKill()">Kill</button>
+    <button onclick="doUnkill()">Lift</button>
+  </div>
+  <div class="kill-msg" id="k_msg"></div>
+  <table><thead><tr><th>Agent</th><th>Device</th><th>Revoked at</th></tr></thead><tbody id="revs"></tbody></table>
 </main>
 <script>
 const usd = n => '$' + (n||0).toFixed(4);
@@ -83,8 +105,53 @@ async function load() {
   (d.by_model||[]).filter(m=>m.name).forEach(m => {
     mb.innerHTML += `<tr><td>${m.name}</td><td class="num">${m.requests}</td><td class="num money">${usd(m.actual_cost)}</td><td class="num">${usd(m.savings)}</td></tr>`;
   });
+  // Per-subject panel: only shown when the relay license entitles it AND the
+  // summary carried subject rows (the server strips them otherwise).
+  const subs = d.by_subject || [];
+  const section = document.getElementById('subjectSection');
+  if (subs.length) {
+    section.style.display = 'block';
+    const sb = document.getElementById('subjects'); sb.innerHTML='';
+    subs.forEach(s => {
+      sb.innerHTML += `<tr><td>${s.name}</td><td class="num">${s.requests}</td><td class="num">${s.cache_hits}</td><td class="num money">${usd(s.actual_cost)}</td><td class="num">${usd(s.savings)}</td></tr>`;
+    });
+  } else {
+    section.style.display = 'none';
+  }
 }
+async function loadRevocations() {
+  try {
+    const r = await fetch('/api/revocations');
+    const list = await r.json();
+    const tb = document.getElementById('revs'); tb.innerHTML='';
+    if (!list.length) { tb.innerHTML = '<tr><td colspan="3" style="color:var(--muted)">No agents revoked.</td></tr>'; return; }
+    list.forEach(x => {
+      const dev = x.device_id === '*' ? 'all devices' : x.device_id;
+      const when = new Date(x.ts*1000).toLocaleString();
+      tb.innerHTML += `<tr><td>${x.agent_id}</td><td>${dev}</td><td>${when}</td></tr>`;
+    });
+  } catch(e) { /* leave table as-is */ }
+}
+async function killAction(path, verb) {
+  const agent = document.getElementById('k_agent').value.trim();
+  const device = document.getElementById('k_device').value.trim();
+  const token = document.getElementById('k_token').value;
+  const msg = document.getElementById('k_msg');
+  if (!agent) { msg.textContent = 'Enter an agent id.'; return; }
+  const headers = { 'Content-Type':'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const body = { agent_id: agent };
+  if (device) body.device_id = device;
+  try {
+    const r = await fetch(path, { method:'POST', headers, body: JSON.stringify(body) });
+    msg.textContent = r.ok ? `${verb} '${agent}'.` : `Failed (${r.status}): check the bearer token.`;
+    if (r.ok) loadRevocations();
+  } catch(e) { msg.textContent = 'Request failed: ' + e; }
+}
+const doKill = () => killAction('/v1/kill', 'Revoked');
+const doUnkill = () => killAction('/v1/unkill', 'Lifted revocation on');
 load();
+loadRevocations();
 </script>
 </body>
 </html>"#;

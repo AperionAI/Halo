@@ -798,16 +798,20 @@ dependencies = [
 
 [[package]]
 name = "halo-common"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
+ "base64",
  "chrono",
+ "ed25519-dalek",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
 name = "halo-relay"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -826,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "halo-shim"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "aperion-shield",

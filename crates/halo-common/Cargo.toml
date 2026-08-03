@@ -11,3 +11,10 @@ description = "Shared types for Smartflow Halo: the published telemetry schema, 
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
+# Offline license verification (see src/license.rs). Same Ed25519 + canonical-
+# JSON primitive Compass uses for attestation bundles -- no network, no
+# phone-home, consistent with Halo's offline-first trust model.
+ed25519-dalek = "2"
+base64 = "0.22"
+sha2.workspace = true
+hex.workspace = true

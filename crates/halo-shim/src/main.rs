@@ -1,5 +1,6 @@
 //! Smartflow Halo shim -- the `halo` binary.
 
+mod alert;
 mod answer;
 mod audit;
 mod budget;
@@ -13,6 +14,7 @@ mod ingress;
 mod keys;
 mod mcp;
 mod report;
+mod revocations;
 mod semantic_cache;
 mod state;
 mod streaming;
@@ -62,6 +64,40 @@ enum Cmd {
     Embeddings {
         #[command(subcommand)]
         action: EmbeddingsCmd,
+    },
+    /// Show or issue license entitlements.
+    License {
+        #[command(subcommand)]
+        action: LicenseCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum LicenseCmd {
+    /// Show the currently active tier, features, and expiry.
+    Show,
+    /// Issuer-only: mint a signed license key (Aperion internal). Requires the
+    /// signing key -- the same 32-byte Ed25519 seed spec compass uses:
+    /// `file:<path>`, `env:<VAR>`, `base64:<...>`, `hex:<...>`, or a bare
+    /// base64/hex seed.
+    Issue {
+        #[arg(long)]
+        org: String,
+        /// Display label for the tier (e.g. "pro", "team").
+        #[arg(long, default_value = "pro")]
+        tier: String,
+        #[arg(long, default_value_t = 1)]
+        seats: u32,
+        /// Repeatable feature flag (alerting, remote_kill,
+        /// semantic_cache_unlimited, subject_attribution, multi_seat).
+        #[arg(long = "feature")]
+        features: Vec<String>,
+        /// Days until the license expires.
+        #[arg(long, default_value_t = 365)]
+        days: i64,
+        /// 32-byte Ed25519 signing-key seed spec (see above).
+        #[arg(long)]
+        signing_key: String,
     },
 }
 
@@ -137,7 +173,103 @@ async fn main() -> Result<()> {
         Cmd::Report { hours } => report_cmd(paths, hours),
         Cmd::Kill { agent } => kill(paths, &agent),
         Cmd::Embeddings { action } => embeddings_cmd(paths, action),
+        Cmd::License { action } => license_cmd(paths, action),
     }
+}
+
+fn license_cmd(paths: Paths, action: LicenseCmd) -> Result<()> {
+    match action {
+        LicenseCmd::Show => {
+            let cfg = Config::load(&paths.config())?;
+            let ent = cfg.entitlements();
+            println!("Smartflow Halo -- license");
+            println!("Tier:     {}", ent.tier_label);
+            println!("Status:   {}", ent.status.label());
+            println!("Org:      {}", ent.org.as_deref().unwrap_or("-"));
+            if ent.seats > 0 {
+                println!("Seats:    {}", ent.seats);
+            }
+            println!("Expires:  {}", ent.expires_at.as_deref().unwrap_or("-"));
+            println!("\nFeatures:");
+            for f in halo_common::license::feature::ALL {
+                let mark = if ent.has(f) { "on " } else { "off" };
+                println!("  [{mark}] {f}");
+            }
+            if matches!(ent.tier, halo_common::Tier::Free) {
+                println!(
+                    "\nThe free tier includes budgets + kill switch, exact-match cache, \n\
+                     compression, prompt-cache injection, MCP cloak/taint, local audit \n\
+                     and `halo report` -- all fully functional. A paid license adds the \n\
+                     features above. Set `license_key` in ~/.halo/config.yaml to activate."
+                );
+            }
+        }
+        LicenseCmd::Issue {
+            org,
+            tier,
+            seats,
+            features,
+            days,
+            signing_key,
+        } => {
+            let seed = load_signing_seed(&signing_key)?;
+            let now = chrono::Utc::now();
+            let claims = halo_common::LicenseClaims {
+                org,
+                tier,
+                seats,
+                features,
+                issued_at: now.to_rfc3339(),
+                expires_at: (now + chrono::Duration::days(days)).to_rfc3339(),
+            };
+            let key = halo_common::license::issue_from_seed(&claims, &seed);
+            println!("{key}");
+            eprintln!(
+                "\nissued for '{}' ({}), {} feature(s), expires in {} days.\n\
+                 Paste this into `license_key` in the customer's ~/.halo/config.yaml.",
+                claims.org,
+                claims.tier,
+                claims.features.len(),
+                days
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Decode a 32-byte Ed25519 seed from a spec (`file:`, `env:`, `base64:`,
+/// `hex:`, or bare base64/hex). Mirrors compass's seed handling so the issuer
+/// workflow is identical across tools.
+fn load_signing_seed(spec: &str) -> Result<[u8; 32]> {
+    use base64::Engine;
+    let raw = if let Some(rest) = spec.strip_prefix("file:") {
+        std::fs::read_to_string(rest)
+            .with_context(|| format!("reading signing key from {rest}"))?
+            .trim()
+            .to_string()
+    } else if let Some(rest) = spec.strip_prefix("env:") {
+        std::env::var(rest).with_context(|| format!("reading signing key from ${rest}"))?
+    } else {
+        spec.to_string()
+    };
+    let raw = raw.trim();
+    let bytes = if let Some(h) = raw.strip_prefix("hex:") {
+        hex::decode(h.trim())?
+    } else if let Some(b) = raw.strip_prefix("base64:") {
+        base64::engine::general_purpose::STANDARD.decode(b.trim())?
+    } else if let Ok(b) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(raw) {
+        b
+    } else if let Ok(b) = base64::engine::general_purpose::STANDARD.decode(raw) {
+        b
+    } else {
+        hex::decode(raw)?
+    };
+    if bytes.len() != 32 {
+        anyhow::bail!("signing seed must be exactly 32 bytes, got {}", bytes.len());
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(arr)
 }
 
 fn embeddings_cmd(paths: Paths, action: EmbeddingsCmd) -> Result<()> {
@@ -320,8 +452,38 @@ async fn serve(paths: Paths) -> Result<()> {
     let ks = Arc::new(keys::KeyStore::new(paths.clone()));
     let device_id = ks.device_id()?;
 
+    // Resolve licensing once, up front. Never fails: absent/invalid/expired
+    // degrades to the free tier so the proxy always starts.
+    let entitlements = cfg.entitlements();
+    match entitlements.tier {
+        halo_common::Tier::Paid => tracing::info!(
+            org = entitlements.org.as_deref().unwrap_or("-"),
+            tier = %entitlements.tier_label,
+            features = ?entitlements.features,
+            "licensed: paid tier active"
+        ),
+        halo_common::Tier::Free => {
+            tracing::info!(status = %entitlements.status.label(), "running on the free tier")
+        }
+    }
+
     let cache = cache::CacheStore::open(&paths.cache(), cfg.cache.max_entries, cfg.cache.enabled)?;
-    let semantic = semantic_cache::SemanticCacheStore::open(&paths.semantic_cache(), cfg.semantic_cache.max_entries)?;
+    // Free tier caps the semantic-cache working set; a license lifts it.
+    let semantic_max = if entitlements.has(halo_common::license::feature::SEMANTIC_CACHE_UNLIMITED) {
+        cfg.semantic_cache.max_entries
+    } else {
+        let ceiling = halo_common::license::FREE_SEMANTIC_CACHE_MAX_ENTRIES;
+        if cfg.semantic_cache.max_entries > ceiling {
+            tracing::info!(
+                configured = cfg.semantic_cache.max_entries,
+                ceiling,
+                "semantic_cache.max_entries capped to the free-tier ceiling \
+                 (a license with `semantic_cache_unlimited` lifts it)"
+            );
+        }
+        cfg.semantic_cache.max_entries.min(ceiling)
+    };
+    let semantic = semantic_cache::SemanticCacheStore::open(&paths.semantic_cache(), semantic_max)?;
     if cfg.semantic_cache.enabled {
         tracing::info!(
             provider = %cfg.semantic_cache.provider,
@@ -373,8 +535,27 @@ async fn serve(paths: Paths) -> Result<()> {
     ));
 
     let listen = cfg.listen.clone();
+
+    // Remote kill overlay: only active with a relay AND the `remote_kill`
+    // entitlement. Everything else about the proxy is unchanged when it's off.
+    let remote_revocations = revocations::RemoteRevocations::new();
+    let remote_kill_on = entitlements.has(halo_common::license::feature::REMOTE_KILL)
+        && cfg.relay_url.is_some();
+    if remote_kill_on {
+        let relay_url = cfg.relay_url.clone().expect("checked is_some");
+        tracing::info!("remote kill enabled (best-effort; local kill switch remains authoritative)");
+        tokio::spawn(revocations::poll_loop(
+            http.clone(),
+            relay_url,
+            cfg.relay_token.clone(),
+            device_id.clone(),
+            remote_revocations.clone(),
+        ));
+    }
+
     let state = state::AppState {
         cfg: Arc::new(cfg),
+        entitlements: Arc::new(entitlements),
         keys: ks,
         cache,
         semantic,
@@ -387,6 +568,7 @@ async fn serve(paths: Paths) -> Result<()> {
         prices: Arc::new(prices),
         device_id,
         http,
+        remote_revocations,
     };
 
     // Background telemetry flush loop.

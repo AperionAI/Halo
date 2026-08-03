@@ -287,3 +287,58 @@ Estimated saved: $0.0260
   of which baseline (compression $0.0044 + provider cache $0.0216): $0.0260  -- applies even at 0% hit rate
   of which from Halo cache hits (exact/semantic):        $0.0000
 ```
+
+## v1.2: tiering / entitlements / packaging (OpenClaw-scale repositioning)
+
+Repositioning Halo for a community-scale, $50-100/mo paid tier without
+weakening the offline-first trust model. OSS-core split: the entire local
+proxy (budgets, kill switch, exact cache, compression, prompt-cache injection,
+MCP cloak/taint, audit, `halo report`) is free forever; only hosted/multi-seat
+conveniences are gated.
+
+**Entitlement primitive (`halo-common::license`).** Reuses Compass's exact
+signed-envelope pattern (`compass-standalone/src/attest.rs`): an Ed25519
+signature over canonical JSON, verified offline against a public key embedded
+in the binary (overridable with `HALO_LICENSE_PUBKEY` for staging). A license
+key is base64url(`{payload, alg, keyid, signature_b64}`) — one paste-friendly
+token. The cardinal rule, enforced in `Entitlements::from_license_key` and
+covered by tests: **absent / malformed / wrong-key / expired always degrades
+to the free tier, never refuses to start** (never brick the proxy). Features
+are string constants, not an enum, so a newer license naming a feature an
+older binary doesn't know is ignored, not a parse error. Issuing is offline
+(`halo license issue --signing-key ...`), key held by Aperion out of band.
+
+**Gating (Path A, self-hosted).** `Entitlements::has()` is the single gate:
+- semantic-cache `max_entries` capped to `FREE_SEMANTIC_CACHE_MAX_ENTRIES`
+  (200) unless `semantic_cache_unlimited` — the cache still works free, just
+  smaller.
+- budget soft/hard-cap crossings POST to `alert_webhook` when `alerting` is
+  entitled (fire-and-forget; never on the hot path).
+- best-effort remote kill: a 30s poll of the relay's `/v1/revocations` merges
+  into an ingress check *alongside* — never replacing — the always-local key
+  revocation and hard-cap kill switch, gated by `remote_kill`.
+- relay multi-seat tokens (`HALO_RELAY_TOKENS`) honored only when the relay's
+  own license (`HALO_RELAY_LICENSE`) entitles `multi_seat`.
+
+**Per-subject attribution.** Optional `X-Halo-Subject` request header threads
+through as `TelemetryEvent.subject` (metadata-only, trimmed + 128-char capped,
+`skip_serializing_if none` so the wire schema is unchanged for anyone not
+using it). Rolled up "by subject" in `halo report` (free, local) and the relay
+summary; the relay strips the by-subject block from `/api/summary` entirely
+unless it's entitled for `subject_attribution` (the gated hosted drill-down),
+so the paid data never reaches the wire on a free relay.
+
+**Packaging.** GitHub Actions CI (build/test/clippy `-D warnings`) and a
+tag-triggered release workflow cross-compiling macOS arm64/x64, Linux
+arm64/x64, and Windows x64, plus a multi-arch GHCR image and a
+`curl | sh` installer — matching the low-friction install bar OpenClaw's own
+userbase expects. (`cargo fmt --check` is deliberately not in CI: the existing
+tree predates a rustfmt pass and reformatting it wholesale would bury feature
+diffs; clippy `-D warnings` is the enforced gate.)
+
+**Deferred to their own cycles:** the Aperion-hosted multi-tenant
+relay-as-a-service (Path B — needs `org_id` schema/auth, accounts, Stripe
+metering; materially a new product surface, to be planned once Phase 0-3 usage
+data exists) and Windows keychain verification on a real Windows host/CI
+runner (the `keyring` Credential Manager backend can behave differently in a
+headless/service context and can't be validated from this Mac).

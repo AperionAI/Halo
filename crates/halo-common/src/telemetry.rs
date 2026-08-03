@@ -78,6 +78,14 @@ pub struct TelemetryEvent {
     /// The agent handle the user chose (e.g. "researcher"). User-controlled,
     /// not derived from any content.
     pub agent_id: String,
+    /// Optional sub-identity within one agent process, set by the runtime via
+    /// the `X-Halo-Subject` request header (e.g. a chat channel, sub-agent
+    /// name, or conversation/thread id). Lets one Gateway process running one
+    /// API key attribute cost across many channels/sub-agents. Like `agent_id`
+    /// this is a user-controlled routing label and MUST NOT carry content --
+    /// the trust invariant above applies to it verbatim. Absent = not set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
     /// RFC 3339 timestamp of when the request completed.
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub provider: Provider,

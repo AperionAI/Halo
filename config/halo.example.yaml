@@ -14,6 +14,20 @@ listen: "127.0.0.1:8787"
 # relay_url: "https://halo-relay.example.com"
 # relay_token: "paste-the-device-token-issued-at-registration"
 
+# Paid-tier license key. Either the signed token itself or a path to a file
+# holding it. Absent / invalid / expired always resolves to the FREE tier and
+# never blocks startup. The free tier -- budgets + kill switch, exact-match
+# cache, compression, prompt-cache injection, MCP cloak/taint, local audit and
+# `halo report` -- is fully functional forever with no key. A license only adds
+# hosted/multi-seat conveniences (alerting/webhooks, remote kill, higher
+# semantic-cache limits, per-subject attribution). Check yours with
+# `halo license show`.
+# license_key: "eyJ...paste-the-token..."      # or: /etc/halo/license.key
+
+# Webhook URL that budget soft/hard-cap crossings POST to. Paid feature
+# ("alerting"); ignored on the free tier.
+# alert_webhook: "https://hooks.example.com/halo-budget"
+
 budget:
   # Rolling window the caps apply over.
   window_hours: 24

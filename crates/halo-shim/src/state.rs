@@ -8,15 +8,21 @@ use crate::config::Config;
 use crate::embeddings::EmbeddingClient;
 use crate::keys::KeyStore;
 use crate::mcp::McpManager;
+use crate::revocations::RemoteRevocations;
 use crate::semantic_cache::SemanticCacheStore;
 use crate::telemetry::Telemetry;
 use halo_common::pricing::{decompose_savings, estimate_cost_usd, PriceTable};
 use halo_common::telemetry::{PolicyDecision, Provider, TelemetryEvent};
+use halo_common::Entitlements;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub struct AppState {
     pub cfg: Arc<Config>,
+    /// Resolved once at `serve` startup from `cfg.license_key`. Read-only; the
+    /// single source of truth for every paid-feature gate. Free tier when
+    /// absent/invalid/expired (never blocks startup).
+    pub entitlements: Arc<Entitlements>,
     pub keys: Arc<KeyStore>,
     pub cache: Arc<CacheStore>,
     /// Always constructed (the redb file is cheap to open); gated at the call
@@ -31,6 +37,10 @@ pub struct AppState {
     pub prices: Arc<PriceTable>,
     pub device_id: String,
     pub http: reqwest::Client,
+    /// Best-effort remotely-revoked agents (paid `remote_kill`). Empty unless a
+    /// relay + entitlement enable the poll loop; the local kill switch is
+    /// always authoritative regardless of this.
+    pub remote_revocations: RemoteRevocations,
 }
 
 impl AppState {
@@ -51,6 +61,21 @@ impl AppState {
             }
             Err(_) => tracing::warn!("audit log mutex poisoned; skipping entry"),
         }
+    }
+
+    /// Fire a budget alert webhook if (and only if) the `alerting` feature is
+    /// entitled and a webhook is configured. Fire-and-forget; never blocks.
+    pub fn maybe_alert_budget(&self, agent: &str, verdict: &crate::budget::BudgetVerdict) {
+        if !self.entitlements.has(halo_common::license::feature::ALERTING) {
+            return;
+        }
+        crate::alert::fire_budget_alert(
+            &self.http,
+            self.cfg.alert_webhook.as_deref(),
+            &self.device_id,
+            agent,
+            verdict,
+        );
     }
 
     /// The shared "a provider call finished" accounting step: compute actual +
@@ -93,6 +118,7 @@ impl AppState {
         self.emit(TelemetryEvent {
             device_id: self.device_id.clone(),
             agent_id: o.agent.clone(),
+            subject: o.subject.clone(),
             timestamp: chrono::Utc::now(),
             provider: o.provider,
             model: o.model.clone(),
@@ -138,6 +164,8 @@ impl AppState {
 /// Everything needed to bill and log one completed (or aborted) provider call.
 pub struct LlmOutcome {
     pub agent: String,
+    /// Optional sub-identity (channel/sub-agent/thread) from `X-Halo-Subject`.
+    pub subject: Option<String>,
     pub provider: Provider,
     pub model: String,
     pub tokens_in: u64,

@@ -42,20 +42,33 @@ config/halo.example.yaml
 docs/TELEMETRY_SCHEMA.md
 ```
 
+## Install
+
+```bash
+# One-liner (macOS/Linux, arm64/x64): downloads the right release binary.
+curl -fsSL https://get.halo.aperion.ai | sh
+
+# Or Docker (ships both `halo` and `halo-relay`):
+docker run --rm -v halo-data:/data -p 8787:8787 ghcr.io/aperionai/halo
+
+# Or build from source:
+cargo build --release
+```
+
+Windows: grab the `.zip` from the [releases page](https://github.com/AperionAI/Halo/releases).
+
 ## Quick start
 
 ```bash
-cargo build --release
-
 # 1. Register an agent. Mints a virtual key; stores the real key in your keychain.
-./target/release/halo agent add researcher --provider openai --key sk-...
+halo agent add researcher --provider openai --key sk-...
 
 # 2. Point your runtime at Halo instead of the provider:
 export OPENAI_API_KEY=sf_live_researcher_...        # the virtual key printed above
 export OPENAI_BASE_URL=http://127.0.0.1:8787/v1
 
 # 3. Run the proxy.
-./target/release/halo serve
+halo serve
 ```
 
 Anthropic works the same way (`--provider anthropic`, then set
@@ -65,7 +78,7 @@ Any OpenAI-compatible third party (Groq, Together, Fireworks, a local
 vLLM/Ollama server) works too — add `--base-url` to `agent add`:
 
 ```bash
-./target/release/halo agent add fast-agent --provider openai \
+halo agent add fast-agent --provider openai \
   --key gsk_... --base-url https://api.groq.com/openai
 ```
 
@@ -75,8 +88,8 @@ not buffered — see `docs/DESIGN_REVIEW.md` for why that matters.
 ### See spend & savings
 
 ```bash
-./target/release/halo status      # live spend by agent, current caps
-./target/release/halo report      # local COGS/savings view — works fully offline
+halo status      # live spend by agent, current caps
+halo report      # local COGS/savings view — works fully offline
 ```
 
 ### Budgets & kill switch
@@ -86,7 +99,7 @@ cap is enforced locally and always** — a single request can't overshoot it, an
 it does not depend on the relay ever being reachable. To stop an agent instantly:
 
 ```bash
-./target/release/halo kill researcher   # revokes its key; proxy refuses it at once
+halo kill researcher   # revokes its key; proxy refuses it at once
 ```
 
 A single long-running stream can't be pre-charged for its eventual size, so
@@ -152,7 +165,7 @@ semantic_cache:
 ```
 
 ```bash
-./target/release/halo embeddings set-key            # prompts for the embeddings API key
+halo embeddings set-key            # prompts for the embeddings API key
 ```
 
 How it stays safe and cheap rather than a source of wrong or stale answers:
@@ -177,15 +190,64 @@ How it stays safe and cheap rather than a source of wrong or stale answers:
 - **Off by default.** Unlike exact-match caching, this makes a real API call
   (unless `provider: mock`/`ollama`) on every miss, so it's opt-in.
 
+On the free tier `max_entries` is capped (a paid license with
+`semantic_cache_unlimited` lifts it); the cache still works either way.
+
 ### The relay (optional)
 
 ```bash
-HALO_RELAY_TOKEN=some-shared-token ./target/release/halo-relay --bind 127.0.0.1:8080
+HALO_RELAY_TOKEN=some-shared-token halo-relay --bind 127.0.0.1:8080
 # open http://127.0.0.1:8080 for the savings dashboard
 ```
 
 Then set `relay_url` + `relay_token` in `~/.halo/config.yaml`. Without a relay,
 Halo is fully functional locally; only the hosted dashboard is unavailable.
+
+The dashboard also has a **remote-kill** panel: revoke an agent fleet-wide or
+per-device and every shim refuses it on its next poll (~30s). This is a
+best-effort backstop only — each shim's local hard-cap kill switch and
+`halo kill` work with zero network and are never gated.
+
+### Per-channel / sub-agent attribution
+
+When one runtime process (e.g. an OpenClaw Gateway) fans a single API key out
+across many chat channels or sub-agents, set an `X-Halo-Subject` header per
+outbound call (`<channel>:<thread-or-user-id>`). Halo records it as metadata
+(never content) and rolls up spend/savings "by subject" in `halo report`. The
+relay's hosted per-subject drill-down is a paid feature (see below).
+
+## Tiers & licensing
+
+Halo follows an OSS-core model. **The free tier is the whole local proxy, and
+it is unconditionally functional forever** — budgets + kill switch, exact-match
+cache, compression, prompt-cache injection, MCP cloak/taint, local audit log,
+and `halo report`. Nothing that keeps a self-hoster safe from a runaway bill is
+ever paywalled.
+
+A **paid license** (an offline, Ed25519-signed key — no phone-home, verified
+against a public key baked into the binary) unlocks hosted/multi-seat
+conveniences:
+
+| Feature | Free | Paid |
+|---|---|---|
+| Local budgets, hard-cap kill switch, `halo kill` | ✅ | ✅ |
+| Exact-match cache, compression, prompt-cache injection | ✅ | ✅ |
+| MCP cloak/taint, local audit log, `halo report` | ✅ | ✅ |
+| Semantic cache | ✅ (capped entries) | ✅ (raised cap) |
+| Budget alerting webhooks | — | ✅ |
+| Best-effort remote kill (pull from relay) | — | ✅ |
+| Relay multi-seat tokens | — | ✅ |
+| Hosted per-subject cost drill-down | — | ✅ |
+
+```bash
+halo license show          # current tier, features, expiry
+```
+
+Set `license_key` (the token, or a path to a file holding it) in
+`~/.halo/config.yaml`. A missing, invalid, or expired key silently resolves to
+the free tier — it never blocks startup. The relay reads its own license from
+`HALO_RELAY_LICENSE` to gate multi-seat tokens (`HALO_RELAY_TOKENS`) and the
+per-subject drill-down.
 
 ## License
 

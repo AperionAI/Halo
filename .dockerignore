@@ -1,0 +1,8 @@
+target/
+.git/
+.github/
+.halo/
+*.md
+docs/
+install.sh
+.DS_Store

@@ -55,6 +55,10 @@ pub struct Report {
     pub total: AgentRollup,
     pub by_agent: BTreeMap<String, AgentRollup>,
     pub by_model: BTreeMap<String, AgentRollup>,
+    /// Per-subject (channel/sub-agent/thread) rollup -- only events that
+    /// carried an `X-Halo-Subject` hint appear here. Empty when nothing set
+    /// one, so a solo user never sees an empty section.
+    pub by_subject: BTreeMap<String, AgentRollup>,
 }
 
 /// Roll up events optionally filtered to those on/after `since` (unix secs).
@@ -81,26 +85,40 @@ pub fn build(events: &[TelemetryEvent], since_secs: Option<i64>, prices: &PriceT
             e.tokens_cached,
             e.compression_ratio,
         );
-        for bucket in [
+        let mut buckets: Vec<&mut AgentRollup> = vec![
             &mut report.total,
             report.by_agent.entry(e.agent_id.clone()).or_default(),
             report.by_model.entry(e.model.clone()).or_default(),
-        ] {
-            bucket.requests += 1;
-            match e.policy_decision {
-                PolicyDecision::SemanticCacheHit => bucket.semantic_hits += 1,
-                _ if e.cache_hit => bucket.cache_hits += 1,
-                _ => {}
-            }
-            bucket.tokens_in += e.tokens_in;
-            bucket.tokens_out += e.tokens_out;
-            bucket.actual_cost += e.estimated_cost;
-            bucket.counterfactual_cost += e.counterfactual_cost;
-            bucket.compression_savings += breakdown.compression_savings;
-            bucket.provider_cache_savings += breakdown.provider_cache_savings;
+        ];
+        if let Some(subj) = e.subject.as_ref().filter(|s| !s.is_empty()) {
+            buckets.push(report.by_subject.entry(subj.clone()).or_default());
+        }
+        for bucket in buckets {
+            accumulate(bucket, e, &breakdown);
         }
     }
     report
+}
+
+/// Fold one event into a rollup bucket. Shared so total/agent/model/subject
+/// buckets can never drift on how a request is counted.
+fn accumulate(
+    bucket: &mut AgentRollup,
+    e: &TelemetryEvent,
+    breakdown: &halo_common::pricing::SavingsBreakdown,
+) {
+    bucket.requests += 1;
+    match e.policy_decision {
+        PolicyDecision::SemanticCacheHit => bucket.semantic_hits += 1,
+        _ if e.cache_hit => bucket.cache_hits += 1,
+        _ => {}
+    }
+    bucket.tokens_in += e.tokens_in;
+    bucket.tokens_out += e.tokens_out;
+    bucket.actual_cost += e.estimated_cost;
+    bucket.counterfactual_cost += e.counterfactual_cost;
+    bucket.compression_savings += breakdown.compression_savings;
+    bucket.provider_cache_savings += breakdown.provider_cache_savings;
 }
 
 /// Render a compact text report for the CLI.
@@ -163,6 +181,17 @@ pub fn render(report: &Report) -> String {
             ));
         }
     }
+    if !report.by_subject.is_empty() {
+        out.push_str("\nBy subject (channel / sub-agent):\n");
+        for (subject, r) in &report.by_subject {
+            out.push_str(&format!(
+                "  {subject:<28} spend {}  saved {}  ({} reqs)\n",
+                fmt_usd(r.actual_cost),
+                fmt_usd(r.savings()),
+                r.requests
+            ));
+        }
+    }
     out
 }
 
@@ -185,6 +214,7 @@ mod tests {
         TelemetryEvent {
             device_id: "d".into(),
             agent_id: agent.into(),
+            subject: None,
             timestamp: chrono::Utc::now(),
             provider: Provider::Openai,
             model: model.into(),
@@ -218,6 +248,21 @@ mod tests {
         assert_eq!(r.total.cache_hits, 1);
         assert!((r.total.savings() - 0.13).abs() < 1e-9);
         assert_eq!(r.by_agent.len(), 2);
+    }
+
+    #[test]
+    fn by_subject_only_populated_when_hint_present() {
+        let mut with_subj = ev("a", "gpt-4o", 0.10, 0.20, false);
+        with_subj.subject = Some("slack:general".into());
+        let without = ev("a", "gpt-4o", 0.10, 0.20, false);
+
+        let r = build(&[with_subj, without], None, &PriceTable::default());
+        // Only the one event with a subject shows up under by_subject.
+        assert_eq!(r.by_subject.len(), 1);
+        let s = &r.by_subject["slack:general"];
+        assert_eq!(s.requests, 1);
+        // ...but both are counted in the totals.
+        assert_eq!(r.total.requests, 2);
     }
 
     #[test]

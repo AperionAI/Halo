@@ -26,6 +26,7 @@ returned to your agent (never on the hot path).
 |---|---|---|
 | `device_id` | string | Stable per-install id (random UUID at first run). Not derived from any content. |
 | `agent_id` | string | The handle you chose (e.g. `researcher`). User-controlled. |
+| `subject` | string (optional) | Sub-identity within one agent, set by the runtime via the `X-Halo-Subject` request header (e.g. `slack:general`, a sub-agent name, or a thread id). User-controlled routing label — MUST NOT carry content; trimmed and length-capped by the shim. Omitted entirely when unset. |
 | `timestamp` | RFC 3339 | When the request completed. |
 | `provider` | enum | `anthropic` \| `openai` \| `other`. |
 | `model` | string | Model name as sent to the provider (e.g. `claude-3-5-sonnet`). |
@@ -37,7 +38,7 @@ returned to your agent (never on the hot path).
 | `latency_ms` | integer | End-to-end latency of the proxied call. |
 | `estimated_cost` | number | Estimated USD actually paid to the provider. |
 | `counterfactual_cost` | number | Estimated USD the request would have cost with no cache and no compression. |
-| `policy_decision` | enum | `allow` \| `cache_hit` \| `budget_blocked` \| `soft_cap_warn` \| `policy_blocked`. |
+| `policy_decision` | enum | `allow` \| `cache_hit` \| `semantic_cache_hit` \| `budget_blocked` \| `soft_cap_warn` \| `policy_blocked`. |
 | `compression_ratio` | number | chars-after / chars-before over compressed text (`1.0` = unchanged). |
 | `error_class` | string | Error class if the call failed (`timeout`, `transport`, `http_429`, …), else empty. |
 

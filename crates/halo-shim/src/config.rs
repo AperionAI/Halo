@@ -30,6 +30,20 @@ pub struct Config {
     #[serde(default)]
     pub relay_token: Option<String>,
 
+    /// Offline license key unlocking paid-tier features. Either the raw signed
+    /// token itself, or a path to a file containing it. Absent / invalid /
+    /// expired always resolves to the free tier -- it never blocks startup.
+    /// The free tier (budgets, kill switch, exact cache, compression,
+    /// prompt-cache injection, MCP cloak/taint, local audit + report) is fully
+    /// functional forever without any key.
+    #[serde(default)]
+    pub license_key: Option<String>,
+
+    /// Webhook URL that budget soft/hard-cap crossings POST to. Paid feature
+    /// (`alerting`) -- ignored on the free tier.
+    #[serde(default)]
+    pub alert_webhook: Option<String>,
+
     #[serde(default)]
     pub budget: BudgetConfig,
 
@@ -72,6 +86,8 @@ impl Default for Config {
             listen: default_listen(),
             relay_url: None,
             relay_token: None,
+            license_key: None,
+            alert_webhook: None,
             budget: BudgetConfig::default(),
             cache: CacheConfig::default(),
             semantic_cache: SemanticCacheConfig::default(),
@@ -325,6 +341,21 @@ impl Config {
         let raw = std::fs::read_to_string(path)?;
         let cfg: Config = serde_yaml::from_str(&raw)?;
         Ok(cfg)
+    }
+
+    /// Resolve the active entitlements from `license_key`. The value may be the
+    /// signed token itself or a path to a file holding it; a path that exists
+    /// is read, otherwise the string is treated as the token. Infallible: any
+    /// problem degrades to the free tier (see `halo_common::license`).
+    pub fn entitlements(&self) -> halo_common::Entitlements {
+        let key = self.license_key.as_deref().map(|raw| {
+            let trimmed = raw.trim();
+            match std::fs::read_to_string(trimmed) {
+                Ok(contents) => contents.trim().to_string(),
+                Err(_) => trimmed.to_string(),
+            }
+        });
+        halo_common::Entitlements::from_license_key(key.as_deref())
     }
 
     /// Build the effective price table: built-in defaults with
