@@ -1,0 +1,39 @@
+# Smartflow Halo -- public-image quick start.
+#
+#   docker compose up -d halo          # just the local proxy (all you need)
+#   docker compose up -d               # proxy + optional savings dashboard/relay
+#
+# The image is public on GHCR; the source repo is private. `halo` and
+# `halo-relay` ship in the SAME image -- the relay is just a different entrypoint.
+services:
+  halo:
+    image: ghcr.io/aperionai/halo:latest
+    restart: unless-stopped
+    ports:
+      - "8787:8787"           # ingress your agent runtime points at
+    volumes:
+      - halo-data:/data       # keychain-less encrypted key store, audit log, cache
+      # Drop your config here (copy from config/halo.example.yaml):
+      - ./halo.yaml:/data/config.yaml:ro
+    # `serve` is the image default; listed here for clarity.
+    command: ["serve"]
+
+  # Optional. Metadata-only telemetry ingest + savings dashboard on :8080.
+  # Model traffic never transits the relay. Omit entirely if you don't want it.
+  halo-relay:
+    image: ghcr.io/aperionai/halo:latest
+    restart: unless-stopped
+    entrypoint: ["halo-relay"]
+    environment:
+      HALO_RELAY_BIND: "0.0.0.0:8080"
+      # ALWAYS set a token in anything but local dev:
+      HALO_RELAY_TOKEN: "${HALO_RELAY_TOKEN:-change-me}"
+      HALO_RELAY_DB: "/data/halo-relay.db"
+    ports:
+      - "8080:8080"           # dashboard (bind to localhost/behind auth in prod)
+    volumes:
+      - relay-data:/data
+
+volumes:
+  halo-data:
+  relay-data:

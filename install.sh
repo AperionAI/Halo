@@ -6,9 +6,13 @@
 # Detects OS/arch, downloads the matching release tarball from GitHub, verifies
 # its SHA-256, and drops the `halo` (and `halo-relay`) binaries into an install
 # dir on PATH. POSIX sh, no dependencies beyond curl/tar/shasum.
+#
+# Binaries are served from a PUBLIC, source-free releases repo so this works
+# with no auth even though the source repo is private. Override the repo with
+# HALO_DIST_REPO=owner/name if you mirror the artifacts elsewhere.
 set -eu
 
-REPO="AperionAI/Halo"
+REPO="${HALO_DIST_REPO:-AperionAI/halo-dist}"
 BIN="halo"
 # Override with HALO_INSTALL_DIR=... to change the destination.
 INSTALL_DIR="${HALO_INSTALL_DIR:-}"

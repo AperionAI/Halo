@@ -89,6 +89,41 @@ jobs:
             halo-${{ matrix.target }}.zip.sha256
           fail_on_unmatched_files: false
 
+  mirror:
+    name: mirror binaries to public dist repo
+    needs: binaries
+    runs-on: ubuntu-latest
+    # No-op until you set the HALO_DIST_REPO repo variable (owner/name of a
+    # PUBLIC, source-free releases repo) and the HALO_DIST_TOKEN secret (a PAT
+    # or fine-grained token with `contents: write` on that dist repo).
+    if: ${{ vars.HALO_DIST_REPO != '' }}
+    steps:
+      - name: Download release assets from this (private) repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist && cd dist
+          gh release download "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'halo-*'
+          ls -l
+
+      - name: Publish to public dist repo
+        env:
+          GH_TOKEN: ${{ secrets.HALO_DIST_TOKEN }}
+          DIST_REPO: ${{ vars.HALO_DIST_REPO }}
+        run: |
+          cd dist
+          # Create the release in the public repo (tag is created against its
+          # default branch); fall back to uploading if it already exists.
+          if ! gh release create "${GITHUB_REF_NAME}" ./* \
+                --repo "${DIST_REPO}" \
+                --title "${GITHUB_REF_NAME}" \
+                --notes "Prebuilt Halo binaries for ${GITHUB_REF_NAME}. Source is closed; see https://get.halo.aperion.ai to install."; then
+            gh release upload "${GITHUB_REF_NAME}" ./* \
+              --repo "${DIST_REPO}" --clobber
+          fi
+
   docker:
     name: docker (GHCR)
     runs-on: ubuntu-latest

@@ -44,18 +44,23 @@ docs/TELEMETRY_SCHEMA.md
 
 ## Install
 
+The source repo is closed, but the artifacts are public — no GitHub auth
+needed. See [`docs/INSTALL.md`](docs/INSTALL.md) for all channels (incl. an
+OpenClaw `docker-compose` recipe).
+
 ```bash
 # One-liner (macOS/Linux, arm64/x64): downloads the right release binary.
 curl -fsSL https://get.halo.aperion.ai | sh
 
-# Or Docker (ships both `halo` and `halo-relay`):
+# Or Docker — public GHCR image, ships both `halo` and `halo-relay`:
 docker run --rm -v halo-data:/data -p 8787:8787 ghcr.io/aperionai/halo
+# ...or `docker compose up -d halo` with the bundled docker-compose.yml.
 
-# Or build from source:
+# Or build from source (licensees with repo access):
 cargo build --release
 ```
 
-Windows: grab the `.zip` from the [releases page](https://github.com/AperionAI/Halo/releases).
+Windows: grab the `.zip` from the [releases page](https://github.com/AperionAI/halo-dist/releases).
 
 ## Quick start
 
