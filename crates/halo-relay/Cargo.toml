@@ -1,0 +1,33 @@
+[package]
+name = "halo-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Smartflow Halo relay -- minimal telemetry ingest + savings dashboard. One axum binary backed by a single SQLite file. Receives metadata only; model traffic never transits the relay."
+
+[[bin]]
+name = "halo-relay"
+path = "src/main.rs"
+
+[dependencies]
+halo-common = { path = "../halo-common" }
+
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+axum = "0.7"
+# Single-file SQLite via rusqlite with the bundled amalgamation so there's no
+# system libsqlite3 dependency to install. Zero-ops at v1 scale.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,17 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Local runtime state (created by `halo serve` / `halo agent add` if HALO_HOME
+# is pointed inside the repo during local testing -- shouldn't happen, but
+# never commit it if it does).
+/.halo/
+
+# Local secrets (none expected, but just in case)
+.env
+.env.local

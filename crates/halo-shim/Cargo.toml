@@ -1,0 +1,61 @@
+[package]
+name = "halo-shim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Smartflow Halo local shim -- the `halo` binary. Proxies LLM API and MCP tool calls for self-hosted agents, enforces local token/spend budgets with a kill switch, caches exact-match responses, and reports metadata-only telemetry to the relay."
+
+[[bin]]
+name = "halo"
+path = "src/main.rs"
+
+[dependencies]
+halo-common = { path = "../halo-common" }
+# Reuse Shield's library surface for the MCP seam: reversible tokenization
+# (CloakVault) and credential-shape detection (taint::entities). This is the
+# explicit "reuse Shield, don't rebuild" decision from the architecture plan.
+aperion-shield = { path = "../../../shield-standalone" }
+
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+hex.workspace = true
+uuid.workspace = true
+dirs.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# HTTP ingress (loopback listener the agent runtime points at) + JSON API.
+axum = "0.7"
+# Outbound calls to providers and the relay. rustls so we don't pick up a
+# system OpenSSL dependency (same posture as Shield/Compass).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Embedded, single-file, pure-Rust KV for the budget ledger and L1 cache.
+# No C dependency, survives restarts, zero ops.
+redb = "2"
+# OS keychain for real provider keys. Pure/system backends only (no libdbus):
+# apple keychain, linux kernel keyutils, windows credential manager. Headless
+# Linux persistence is covered by the encrypted-file fallback in keys.rs.
+keyring = { version = "3", features = ["apple-native", "linux-native", "windows-native"] }
+# Encrypted-file credential fallback (headless boxes with no keychain):
+# Argon2id KDF over a passphrase + XChaCha20-Poly1305 AEAD. Both pure Rust.
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+getrandom = "0.2"
+base64 = "0.22"
+# Config file (halo.yaml).
+serde_yaml = "0.9"
+# Wraps a tokio mpsc::Receiver as a Stream for genuine SSE passthrough
+# (axum::body::Body::from_stream) instead of buffering full completions.
+tokio-stream = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

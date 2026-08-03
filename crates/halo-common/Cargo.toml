@@ -1,0 +1,13 @@
+[package]
+name = "halo-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Shared types for Smartflow Halo: the published telemetry schema, provider/pricing model, and virtual-key format. Single source of truth kept in sync between the shim and the relay."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true

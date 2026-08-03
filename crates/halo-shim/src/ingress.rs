@@ -1,0 +1,581 @@
+//! LLM-API and MCP ingress.
+//!
+//! Loopback listeners the agent runtime points at instead of the real
+//! provider. Anthropic-compatible (`/v1/messages`) and OpenAI-compatible
+//! (`/v1/chat/completions`, `/v1/embeddings`), plus an MCP seam
+//! (`/mcp/:server`). The request pipeline, in order:
+//!
+//!   virtual-key auth -> compression -> exact-match cache -> budget preflight
+//!   (kill switch) -> provider forward with the real key -> usage/cost accounting
+//!   -> cache store -> audit -> metadata telemetry.
+//!
+//! Streaming (`"stream": true`) requests are genuinely passed through byte by
+//! byte as they arrive from the provider -- see [`stream_response`] -- rather
+//! than buffered, which is table stakes for an interactive agent proxy.
+//!
+//! Provider API keys never leave this process's memory + the OS keychain.
+
+use crate::budget::{BudgetVerdict, Caps};
+use crate::cache::CacheEntry;
+use crate::state::{AppState, LlmOutcome};
+use crate::{cachekey, compress, streaming, util};
+use axum::{
+    body::Body,
+    extract::{Path, State},
+    http::{header, HeaderMap, StatusCode},
+    response::Response,
+    routing::{get, post},
+    Router,
+};
+use halo_common::pricing::estimate_cost_usd;
+use halo_common::telemetry::{PolicyDecision, Provider};
+use serde_json::Value;
+
+/// Which OpenAI/Anthropic surface this request hit.
+#[derive(Clone, Copy)]
+enum ApiKind {
+    AnthropicMessages,
+    OpenAiChat,
+    OpenAiEmbeddings,
+}
+
+impl ApiKind {
+    fn task_class(&self) -> &'static str {
+        match self {
+            ApiKind::AnthropicMessages | ApiKind::OpenAiChat => "chat",
+            ApiKind::OpenAiEmbeddings => "embedding",
+        }
+    }
+    fn upstream_path(&self) -> &'static str {
+        match self {
+            ApiKind::AnthropicMessages => "/v1/messages",
+            ApiKind::OpenAiChat => "/v1/chat/completions",
+            ApiKind::OpenAiEmbeddings => "/v1/embeddings",
+        }
+    }
+    fn is_chat(&self) -> bool {
+        !matches!(self, ApiKind::OpenAiEmbeddings)
+    }
+}
+
+pub fn router(state: AppState) -> Router {
+    Router::new()
+        .route("/healthz", get(|| async { "ok" }))
+        .route("/v1/messages", post(anthropic_messages))
+        .route("/v1/chat/completions", post(openai_chat))
+        .route("/v1/embeddings", post(openai_embeddings))
+        .route("/mcp/:server", post(mcp_proxy))
+        .with_state(state)
+}
+
+async fn anthropic_messages(State(st): State<AppState>, h: HeaderMap, body: String) -> Response {
+    handle_llm(st, h, body, ApiKind::AnthropicMessages).await
+}
+async fn openai_chat(State(st): State<AppState>, h: HeaderMap, body: String) -> Response {
+    handle_llm(st, h, body, ApiKind::OpenAiChat).await
+}
+async fn openai_embeddings(State(st): State<AppState>, h: HeaderMap, body: String) -> Response {
+    handle_llm(st, h, body, ApiKind::OpenAiEmbeddings).await
+}
+
+fn json_response(code: StatusCode, ct: &str, body: String) -> Response {
+    Response::builder()
+        .status(code)
+        .header(header::CONTENT_TYPE, ct)
+        .body(Body::from(body))
+        .unwrap()
+}
+
+fn error_response(code: StatusCode, msg: &str) -> Response {
+    let body = serde_json::json!({ "error": { "message": msg, "type": "halo_error" } });
+    json_response(code, "application/json", body.to_string())
+}
+
+fn extract_vkey(headers: &HeaderMap) -> Option<String> {
+    if let Some(v) = headers.get("x-api-key").and_then(|h| h.to_str().ok()) {
+        return Some(v.to_string());
+    }
+    if let Some(v) = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok()) {
+        return Some(
+            v.strip_prefix("Bearer ")
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| v.to_string()),
+        );
+    }
+    None
+}
+
+/// Extract (tokens_in, tokens_out, tokens_cached) from a non-streamed
+/// provider response body.
+fn parse_usage(provider: Provider, json: &Value) -> (u64, u64, u64) {
+    let u = match json.get("usage") {
+        Some(u) => u,
+        None => return (0, 0, 0),
+    };
+    match provider {
+        Provider::Anthropic => {
+            let cin = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let out = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let cached = u
+                .get("cache_read_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            // Anthropic reports fresh input separately from cache reads; total
+            // input billed = input_tokens + cache reads + cache creation.
+            let created = u
+                .get("cache_creation_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            (cin + cached + created, out, cached)
+        }
+        _ => {
+            let cin = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let out = u
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let cached = u
+                .pointer("/prompt_tokens_details/cached_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            (cin, out, cached)
+        }
+    }
+}
+
+/// Resolve the upstream base URL: an agent-specific override (for
+/// OpenAI-compatible third parties -- Groq, Together, a local vLLM/Ollama
+/// server) wins, else the provider's default.
+fn provider_base(provider: Provider, override_url: Option<&str>) -> String {
+    if let Some(u) = override_url {
+        return u.trim_end_matches('/').to_string();
+    }
+    match provider {
+        Provider::Anthropic => "https://api.anthropic.com".to_string(),
+        _ => "https://api.openai.com".to_string(),
+    }
+}
+
+async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKind) -> Response {
+    // 1. Virtual-key auth.
+    let vkey = match extract_vkey(&headers) {
+        Some(v) => v,
+        None => return error_response(StatusCode::UNAUTHORIZED, "missing API key"),
+    };
+    let record = match st.keys.resolve(&vkey) {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return error_response(
+                StatusCode::UNAUTHORIZED,
+                "unrecognized or revoked Halo virtual key",
+            )
+        }
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let agent = record.agent_id.clone();
+    let provider = record.provider;
+    let provider_str = provider.as_str();
+    let original: Option<Value> = serde_json::from_str(&body).ok();
+    let model = original
+        .as_ref()
+        .and_then(|j| j.get("model").and_then(|m| m.as_str()))
+        .unwrap_or_default()
+        .to_string();
+    let is_stream = kind.is_chat()
+        && original
+            .as_ref()
+            .map(streaming::wants_stream)
+            .unwrap_or(false);
+
+    // 2. Compression (chat only) -- must genuinely reduce what leaves the box.
+    let mut compression_ratio = 1.0f64;
+    let mut outbound = body.clone();
+    if kind.is_chat() {
+        let c = compress::compress_body(
+            &outbound,
+            st.cfg.compression.verbose_phrases,
+            st.cfg.compression.aggressive_abbreviations,
+        );
+        compression_ratio = c.ratio;
+        if let Some(b) = c.body {
+            outbound = b;
+        }
+        if matches!(kind, ApiKind::AnthropicMessages) && st.cfg.compression.anthropic_cache_control {
+            if let Some(inj) = st.injector.process_anthropic(&outbound) {
+                tracing::debug!(warm = inj.warm, "injected anthropic cache_control breakpoint");
+                outbound = inj.body;
+            }
+        }
+        // OpenAI-compatible streams only carry a final usage chunk if asked
+        // for it; ask automatically so telemetry doesn't silently go blind.
+        if is_stream && matches!(provider, Provider::Openai | Provider::Other) {
+            if let Ok(mut j) = serde_json::from_str::<Value>(&outbound) {
+                streaming::ensure_openai_stream_usage(&mut j);
+                outbound = j.to_string();
+            }
+        }
+    }
+
+    // 3. Exact-match cache lookup (on the original request shape). Streaming
+    // requests never produce a cache key (see `cachekey::request_cache_key`),
+    // so this is naturally skipped for them.
+    let cache_key = if kind.is_chat() {
+        cachekey::request_cache_key(provider_str, &body)
+    } else {
+        None
+    };
+    if let Some(key) = &cache_key {
+        if let Ok(Some(entry)) = st.cache.get(key) {
+            st.finalize_llm_call(LlmOutcome {
+                agent: agent.clone(),
+                provider,
+                model: entry.model.clone(),
+                tokens_in: entry.tokens_in,
+                tokens_out: entry.tokens_out,
+                tokens_cached: 0,
+                task_class: kind.task_class().into(),
+                latency_ms: 0,
+                compression_ratio: 1.0,
+                decision: PolicyDecision::CacheHit,
+                error_class: String::new(),
+                record_spend: false,
+                streamed: false,
+            })
+            .await;
+            return json_response(
+                StatusCode::from_u16(entry.status).unwrap_or(StatusCode::OK),
+                &entry.content_type,
+                entry.body,
+            );
+        }
+    }
+
+    // 4. Budget preflight (kill switch). Conservative output allowance so one
+    // non-streamed request can't overshoot a hard cap. Streaming requests get
+    // the SAME pre-flight check (this is the primary enforcement point in
+    // both cases) plus a coarse mid-stream stop-loss below, since a single
+    // long-running generation can't be pre-charged for its eventual size.
+    let approx_in = util::approx_tokens_from_chars(outbound.len());
+    let projected = estimate_cost_usd(&st.prices, &model, approx_in, 1024, 0);
+    let (gs, gh) = (st.cfg.budget.soft_cap_usd, st.cfg.budget.hard_cap_usd);
+    let over = st.cfg.budget.per_agent.iter().find(|a| a.agent_id == agent);
+    let caps = Caps {
+        global_soft: gs,
+        global_hard: gh,
+        agent_soft: over.and_then(|a| a.soft_cap_usd),
+        agent_hard: over.and_then(|a| a.hard_cap_usd),
+    };
+    let verdict = st
+        .ledger
+        .check(&agent, projected, caps)
+        .unwrap_or(BudgetVerdict::Allow);
+    if let BudgetVerdict::HardBlock { scope, spent, cap } = &verdict {
+        st.finalize_llm_call(LlmOutcome {
+            agent: agent.clone(),
+            provider,
+            model: model.clone(),
+            tokens_in: 0,
+            tokens_out: 0,
+            tokens_cached: 0,
+            task_class: kind.task_class().into(),
+            latency_ms: 0,
+            compression_ratio,
+            decision: PolicyDecision::BudgetBlocked,
+            error_class: String::new(),
+            record_spend: false,
+            streamed: false,
+        })
+        .await;
+        return error_response(
+            StatusCode::PAYMENT_REQUIRED,
+            &format!(
+                "Halo hard budget cap reached ({scope}: ${spent:.2} spent, ${cap:.2} cap). \
+                 Request refused locally. Raise the cap in ~/.halo/config.yaml or run `halo status`."
+            ),
+        );
+    }
+    let soft_warned = matches!(verdict, BudgetVerdict::SoftWarn { .. });
+
+    // 5. Forward to the real provider with the real key.
+    let real_key = match st.keys.get_secret(&agent) {
+        Ok(k) => k,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let base = provider_base(provider, record.base_url.as_deref());
+    let url = format!("{base}{}", kind.upstream_path());
+    let started = std::time::Instant::now();
+    let mut req = st
+        .http
+        .post(&url)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(outbound.clone());
+    req = match provider {
+        Provider::Anthropic => {
+            let ver = headers
+                .get("anthropic-version")
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or("2023-06-01");
+            req.header("x-api-key", real_key).header("anthropic-version", ver)
+        }
+        _ => req.header(header::AUTHORIZATION, format!("Bearer {real_key}")),
+    };
+
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let err_class = if e.is_timeout() { "timeout" } else { "transport" };
+            st.finalize_llm_call(LlmOutcome {
+                agent: agent.clone(),
+                provider,
+                model: model.clone(),
+                tokens_in: 0,
+                tokens_out: 0,
+                tokens_cached: 0,
+                task_class: kind.task_class().into(),
+                latency_ms: started.elapsed().as_millis() as u64,
+                compression_ratio,
+                decision: PolicyDecision::Allow,
+                error_class: err_class.into(),
+                record_spend: false,
+                streamed: false,
+            })
+            .await;
+            return error_response(StatusCode::BAD_GATEWAY, &format!("upstream error: {e}"));
+        }
+    };
+
+    let status = resp.status();
+
+    // 5b. Genuine streaming passthrough -- forward bytes as they arrive
+    // instead of buffering the full completion. Accounting happens once the
+    // stream ends, off the hot path, via the spawned task in
+    // `stream_response`.
+    if is_stream && status.is_success() {
+        return stream_response(
+            st,
+            agent,
+            provider,
+            model,
+            kind.task_class().to_string(),
+            compression_ratio,
+            soft_warned,
+            caps,
+            resp,
+            started,
+        )
+        .await;
+    }
+
+    let ct = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("application/json")
+        .to_string();
+    let resp_body = resp.text().await.unwrap_or_default();
+    let latency_ms = started.elapsed().as_millis() as u64;
+
+    // 6. Usage + cost accounting.
+    let parsed: Option<Value> = serde_json::from_str(&resp_body).ok();
+    let (tokens_in, tokens_out, tokens_cached) = parsed
+        .as_ref()
+        .map(|j| parse_usage(provider, j))
+        .unwrap_or((0, 0, 0));
+    let effective_model = parsed
+        .as_ref()
+        .and_then(|j| j.get("model").and_then(|m| m.as_str()))
+        .map(str::to_string)
+        .unwrap_or(model.clone());
+
+    let decision = if soft_warned {
+        PolicyDecision::SoftCapWarn
+    } else {
+        PolicyDecision::Allow
+    };
+    let error_class = if status.is_success() {
+        String::new()
+    } else {
+        format!("http_{}", status.as_u16())
+    };
+
+    st.finalize_llm_call(LlmOutcome {
+        agent: agent.clone(),
+        provider,
+        model: effective_model.clone(),
+        tokens_in,
+        tokens_out,
+        tokens_cached,
+        task_class: kind.task_class().into(),
+        latency_ms,
+        compression_ratio,
+        decision,
+        error_class,
+        record_spend: status.is_success(),
+        streamed: false,
+    })
+    .await;
+
+    // 7. Store in cache on a clean success.
+    if status.is_success() {
+        if let Some(key) = &cache_key {
+            let entry = CacheEntry {
+                status: status.as_u16(),
+                content_type: ct.clone(),
+                body: resp_body.clone(),
+                model: effective_model,
+                tokens_in,
+                tokens_out,
+                created_at: chrono::Utc::now().timestamp(),
+            };
+            let _ = st.cache.put(key, &entry);
+        }
+    }
+
+    json_response(
+        StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+        &ct,
+        resp_body,
+    )
+}
+
+/// Stream the upstream response to the client byte-for-byte as it arrives,
+/// while a background task accumulates it for post-hoc usage/cost accounting
+/// and a coarse runaway-cost stop-loss.
+///
+/// Accounting can only happen after the fact for a streamed response (we
+/// don't know the final token count until the provider says so), which is
+/// also true of every comparable proxy -- the pre-flight check above is the
+/// primary enforcement point. This stop-loss is a backstop against a
+/// pathological runaway generation, not the main guarantee.
+#[allow(clippy::too_many_arguments)]
+async fn stream_response(
+    st: AppState,
+    agent: String,
+    provider: Provider,
+    fallback_model: String,
+    task_class: String,
+    compression_ratio: f64,
+    soft_warned: bool,
+    caps: Caps,
+    mut upstream: reqwest::Response,
+    started: std::time::Instant,
+) -> Response {
+    let ct = upstream
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("text/event-stream")
+        .to_string();
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(32);
+
+    tokio::spawn(async move {
+        let mut acc: Vec<u8> = Vec::new();
+        let mut abort_reason: Option<String> = None;
+
+        loop {
+            match upstream.chunk().await {
+                Ok(Some(bytes)) => {
+                    acc.extend_from_slice(&bytes);
+                    if tx.send(Ok(bytes)).await.is_err() {
+                        break; // client disconnected; stop pulling from upstream.
+                    }
+                    // Coarse stop-loss: trip only when we're WAY past the hard cap
+                    // (3x) so the char/4 approximation and provider framing
+                    // overhead can't false-positive on a normal request.
+                    if let Some(hard) = caps.agent_hard.or(caps.global_hard) {
+                        if hard > 0.0 {
+                            let approx_out = util::approx_tokens_from_chars(acc.len());
+                            let approx_cost =
+                                estimate_cost_usd(&st.prices, &fallback_model, 0, approx_out, 0);
+                            if approx_cost > hard * 3.0 {
+                                abort_reason = Some(format!(
+                                    "runaway_stream_over_hard_cap(~${approx_cost:.2}_vs_${hard:.2})"
+                                ));
+                                tracing::warn!(
+                                    "halo: aborting runaway stream for agent '{agent}': {}",
+                                    abort_reason.as_deref().unwrap_or("")
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!("halo: stream read error for agent '{agent}': {e}");
+                    abort_reason = Some("transport".to_string());
+                    break;
+                }
+            }
+        }
+        drop(tx); // closes the response body to the client.
+
+        let text = String::from_utf8_lossy(&acc);
+        let (tokens_in, tokens_out, tokens_cached, model) =
+            streaming::extract_usage(provider, &text, &fallback_model);
+        let decision = if abort_reason.is_some() {
+            PolicyDecision::BudgetBlocked
+        } else if soft_warned {
+            PolicyDecision::SoftCapWarn
+        } else {
+            PolicyDecision::Allow
+        };
+        st.finalize_llm_call(LlmOutcome {
+            agent,
+            provider,
+            model,
+            tokens_in,
+            tokens_out,
+            tokens_cached,
+            task_class,
+            latency_ms: started.elapsed().as_millis() as u64,
+            compression_ratio,
+            decision,
+            error_class: abort_reason.unwrap_or_default(),
+            record_spend: true, // bill whatever was actually streamed, even if aborted.
+            streamed: true,
+        })
+        .await;
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, ct)
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
+async fn mcp_proxy(
+    State(st): State<AppState>,
+    Path(server): Path<String>,
+    body: String,
+) -> Response {
+    let mgr = match &st.mcp {
+        Some(m) => m.clone(),
+        None => return error_response(StatusCode::NOT_FOUND, "no MCP servers configured"),
+    };
+    let frame: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, &format!("invalid JSON-RPC: {e}")),
+    };
+
+    match mgr.proxy(&server, frame).await {
+        Ok((resp, report)) => {
+            let blocked_kinds = report.outbound_secret_kinds.clone();
+            st.audit(serde_json::json!({
+                "kind": "mcp_call",
+                "server": server,
+                "method": report.method,
+                "tool": report.tool,
+                "uncloaked": report.uncloaked,
+                "scrubbed": report.scrubbed,
+                "outbound_secret_kinds": blocked_kinds,
+                "inbound_secret_kinds": report.inbound_secret_kinds,
+            }));
+            json_response(StatusCode::OK, "application/json", resp.to_string())
+        }
+        Err(e) => error_response(StatusCode::BAD_GATEWAY, &format!("MCP error: {e}")),
+    }
+}

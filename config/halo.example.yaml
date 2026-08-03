@@ -1,0 +1,65 @@
+# Smartflow Halo shim configuration.
+#
+# Copy to ~/.halo/config.yaml (or set $HALO_HOME to relocate the base dir).
+# Every field is optional; the defaults below are what Halo uses when the file
+# is absent. Real provider keys are NEVER stored here -- they live in your OS
+# keychain (see `halo agent add`).
+
+# Loopback address the LLM-API ingress binds to. Keep it on 127.0.0.1 unless
+# you deliberately want other machines to reach the proxy.
+listen: "127.0.0.1:8787"
+
+# Minimal hosted relay for the savings dashboard. Omit both to run fully local
+# (budgets, cache, and `halo report` all still work offline).
+# relay_url: "https://halo-relay.example.com"
+# relay_token: "paste-the-device-token-issued-at-registration"
+
+budget:
+  # Rolling window the caps apply over.
+  window_hours: 24
+  # Global caps across all agents. soft = warn but keep serving; hard = the
+  # kill switch (refuse locally, always, even if the relay was never up).
+  soft_cap_usd: 50.0
+  hard_cap_usd: 100.0
+  # Optional per-agent overrides (win over the global caps for that agent).
+  per_agent:
+    - agent_id: "researcher"
+      soft_cap_usd: 10.0
+      hard_cap_usd: 20.0
+
+cache:
+  enabled: true
+  # Hard cap on stored entries -- enforced from day one, not bolted on later.
+  max_entries: 10000
+
+compression:
+  # Safe, meaning-preserving multi-word reductions. On by default.
+  verbose_phrases: true
+  # Aggressive single-word/symbol abbreviations (e.g. "and" -> "&"). These can
+  # change meaning, so they are strictly opt-in.
+  aggressive_abbreviations: false
+  # Inject Anthropic cache_control breakpoints on large/repeated system prompts.
+  anthropic_cache_control: true
+
+# MCP servers Halo fronts. Point your agent runtime's MCP config at Halo
+# (e.g. http://127.0.0.1:8787/mcp/<name>) instead of these servers directly.
+# Halo runs each server internally and applies Shield's cloak + taint at the
+# seam. Register secrets with `aperion-shield` and reference them in tool args
+# as {{cloak:NAME}}; Halo resolves them only on the copy sent upstream.
+mcp_servers:
+  - name: "postgres"
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"]
+    env: {}
+
+# The built-in price table is a small, hand-maintained approximation (unlike
+# LiteLLM's continuously-refreshed price file) and falls back to a mid-tier
+# guess for models it doesn't recognize. That's fine most of the time, but
+# it matters a lot for a budget/kill-switch product -- override anything it
+# gets wrong here. `model` is substring-matched the same way as the built-in
+# table (longest match wins).
+# price_overrides:
+#   - model: "gpt-4o-mini"
+#     input_per_mtok: 0.15
+#     output_per_mtok: 0.60
+#     cached_input_per_mtok: 0.075

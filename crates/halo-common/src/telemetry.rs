@@ -1,0 +1,109 @@
+//! The published, metadata-only telemetry schema.
+//!
+//! CRITICAL TRUST INVARIANT: this struct is the *entire* set of fields the
+//! relay ever receives. No prompt text, no response text, no tool arguments,
+//! no file paths, no embeddings or vectors of any kind, ever. This is
+//! published verbatim in `docs/TELEMETRY_SCHEMA.md` and is checkable against
+//! the open-source shim. If you add a field here, it must be metadata that a
+//! privacy-conscious developer would be comfortable seeing leave their
+//! machine -- otherwise it does not belong in Halo.
+
+use serde::{Deserialize, Serialize};
+
+/// Which upstream model provider a request went to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    Anthropic,
+    Openai,
+    /// An OpenAI-compatible endpoint we don't specifically recognize.
+    Other,
+}
+
+impl Provider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Provider::Anthropic => "anthropic",
+            Provider::Openai => "openai",
+            Provider::Other => "other",
+        }
+    }
+}
+
+/// The outcome of the local policy gate for a request. Kept as a small enum so
+/// the relay can aggregate decisions without ever seeing what triggered them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyDecision {
+    Allow,
+    /// Served locally from cache; never left the machine.
+    CacheHit,
+    /// Rejected by a hard budget cap (the kill switch).
+    BudgetBlocked,
+    /// A soft cap was exceeded but the request was still served.
+    SoftCapWarn,
+    /// Blocked by a tool/domain policy at the MCP seam.
+    PolicyBlocked,
+}
+
+impl PolicyDecision {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PolicyDecision::Allow => "allow",
+            PolicyDecision::CacheHit => "cache_hit",
+            PolicyDecision::BudgetBlocked => "budget_blocked",
+            PolicyDecision::SoftCapWarn => "soft_cap_warn",
+            PolicyDecision::PolicyBlocked => "policy_blocked",
+        }
+    }
+}
+
+/// One telemetry event. Emitted once per proxied request, after the response
+/// is returned to the agent (asynchronously -- never on the hot path).
+///
+/// Every field here is metadata. See the trust invariant at the top of this
+/// module before adding anything.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelemetryEvent {
+    /// Stable per-install identifier (random UUID chosen at first run).
+    pub device_id: String,
+    /// The agent handle the user chose (e.g. "researcher"). User-controlled,
+    /// not derived from any content.
+    pub agent_id: String,
+    /// RFC 3339 timestamp of when the request completed.
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub provider: Provider,
+    /// Model name as sent to the provider (e.g. "claude-3-5-sonnet").
+    pub model: String,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    /// Provider-reported cached input tokens (Anthropic cache reads / OpenAI
+    /// automatic cache), when available.
+    pub tokens_cached: u64,
+    /// True when Halo served this request entirely from its local exact-match
+    /// cache and never called the provider.
+    pub cache_hit: bool,
+    /// Coarse task classification (e.g. "chat", "embedding"). Never content.
+    pub task_class: String,
+    pub latency_ms: u64,
+    /// Estimated cost in USD of what was actually paid to the provider.
+    pub estimated_cost: f64,
+    /// Estimated cost in USD this request *would* have cost with no cache and
+    /// no compression -- the counterfactual baseline. The relay's savings
+    /// engine sums (counterfactual_cost - estimated_cost) to produce the
+    /// headline savings number.
+    pub counterfactual_cost: f64,
+    pub policy_decision: PolicyDecision,
+    /// Ratio of prompt chars after compression to before (1.0 = no change).
+    pub compression_ratio: f64,
+    /// Provider/transport error class if the call failed (e.g. "timeout",
+    /// "http_429"), else empty.
+    pub error_class: String,
+}
+
+/// A batch of events uploaded to the relay in one request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelemetryBatch {
+    pub device_id: String,
+    pub events: Vec<TelemetryEvent>,
+}

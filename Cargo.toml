@@ -1,0 +1,39 @@
+# Smartflow Halo -- standalone agent-side governance proxy.
+#
+# Intentionally NOT a member of the enterprise smartflow workspace (same
+# posture as shield-standalone and compass-standalone): its own release
+# cadence and a lean dependency tree so it installs cleanly on a developer's
+# machine. The heavy, coupled parts of the main proxy (actix-web, sqlx,
+# ldap3, mongodb, candle/hf-hub embeddings) are deliberately absent.
+[workspace]
+resolver = "2"
+members = ["crates/halo-common", "crates/halo-shim", "crates/halo-relay"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Aperion <support@aperion.ai>"]
+repository = "https://github.com/AperionAI/halo"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "sync", "time", "process", "signal", "net"] }
+clap = { version = "4", features = ["derive", "env"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+thiserror = "1"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+uuid = { version = "1", features = ["v4"] }
+dirs = "5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+codegen-units = 1
