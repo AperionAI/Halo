@@ -20,8 +20,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Single source of truth for "which tag are we building", so push and
+  # workflow_dispatch triggers behave identically everywhere below --
+  # checkout ref, release tag_name, mirror's gh calls, and Docker tags all
+  # read from here instead of the ambient (and dispatch-inconsistent)
+  # github.ref_name / GITHUB_REF_NAME.
+  resolve:
+    name: resolve target tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.r.outputs.tag }}
+      version: ${{ steps.r.outputs.version }}
+    steps:
+      - id: r
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#halo-v}" >> "$GITHUB_OUTPUT"
+
   binaries:
     name: ${{ matrix.target }}
+    needs: resolve
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -40,6 +59,8 @@ jobs:
             os: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -103,7 +124,7 @@ jobs:
 
   publish:
     name: publish binaries to GitHub Release
-    needs: binaries
+    needs: [resolve, binaries]
     runs-on: ubuntu-latest
     steps:
       - name: Download all target artifacts
@@ -115,24 +136,27 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.resolve.outputs.tag }}
           files: dist/*
           fail_on_unmatched_files: false
 
   mirror:
     name: mirror binaries to public dist repo
-    needs: publish
+    needs: [resolve, publish]
     runs-on: ubuntu-latest
     # No-op until you set the HALO_DIST_REPO repo variable (owner/name of a
     # PUBLIC, source-free releases repo) and the HALO_DIST_TOKEN secret (a PAT
     # or fine-grained token with `contents: write` on that dist repo).
     if: ${{ vars.HALO_DIST_REPO != '' }}
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
     steps:
       - name: Download release assets from this (private) repo
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p dist && cd dist
-          gh release download "${GITHUB_REF_NAME}" \
+          gh release download "$TAG" \
             --repo "${GITHUB_REPOSITORY}" \
             --pattern 'halo-*'
           ls -l
@@ -145,19 +169,22 @@ jobs:
           cd dist
           # Create the release in the public repo (tag is created against its
           # default branch); fall back to uploading if it already exists.
-          if ! gh release create "${GITHUB_REF_NAME}" ./* \
+          if ! gh release create "$TAG" ./* \
                 --repo "${DIST_REPO}" \
-                --title "${GITHUB_REF_NAME}" \
-                --notes "Prebuilt Halo binaries for ${GITHUB_REF_NAME}. Source is closed; see https://get.halo.aperion.ai to install."; then
-            gh release upload "${GITHUB_REF_NAME}" ./* \
+                --title "$TAG" \
+                --notes "Prebuilt Halo binaries for $TAG. Source is closed; see https://get.halo.aperion.ai to install."; then
+            gh release upload "$TAG" ./* \
               --repo "${DIST_REPO}" --clobber
           fi
 
   docker:
     name: docker (GHCR)
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -172,7 +199,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=match,pattern=halo-v(.*),group=1
+            type=raw,value=${{ needs.resolve.outputs.version }}
             type=raw,value=latest
 
       - name: Set up Buildx
