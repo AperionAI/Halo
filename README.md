@@ -256,4 +256,5 @@ per-subject drill-down.
 
 ## License
 
-Apache-2.0.
+Proprietary — binaries and images only, no source distributed. See
+[LICENSE](LICENSE) (Aperion AI Halo Binary License Agreement).

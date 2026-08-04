@@ -2,7 +2,7 @@
 name = "halo-shim"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Smartflow Halo local shim -- the `halo` binary. Proxies LLM API and MCP tool calls for self-hosted agents, enforces local token/spend budgets with a kill switch, caches exact-match responses, and reports metadata-only telemetry to the relay."

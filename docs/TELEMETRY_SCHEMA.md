@@ -1,8 +1,10 @@
 # Halo Telemetry Schema (v1)
 
 This is the **complete** set of fields Halo's shim ever sends to the relay.
-It is published verbatim, before launch, so the claim is checkable against the
-open-source shim (`crates/halo-common/src/telemetry.rs`).
+It is published verbatim, before launch, so the claim is independently
+checkable by capturing the actual wire traffic between your shim and relay
+(e.g. point `relay_url` at a debug endpoint or packet-capture the connection)
+and confirming it never exceeds this schema.
 
 ## The one invariant
 

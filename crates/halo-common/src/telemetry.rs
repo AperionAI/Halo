@@ -3,8 +3,8 @@
 //! CRITICAL TRUST INVARIANT: this struct is the *entire* set of fields the
 //! relay ever receives. No prompt text, no response text, no tool arguments,
 //! no file paths, no embeddings or vectors of any kind, ever. This is
-//! published verbatim in `docs/TELEMETRY_SCHEMA.md` and is checkable against
-//! the open-source shim. If you add a field here, it must be metadata that a
+//! published verbatim in `docs/TELEMETRY_SCHEMA.md` and is checkable by
+//! capturing actual wire traffic to the relay. If you add a field here, it must be metadata that a
 //! privacy-conscious developer would be comfortable seeing leave their
 //! machine -- otherwise it does not belong in Halo.
 

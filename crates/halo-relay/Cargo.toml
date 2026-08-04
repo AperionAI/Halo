@@ -2,7 +2,7 @@
 name = "halo-relay"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Smartflow Halo relay -- minimal telemetry ingest + savings dashboard. One axum binary backed by a single SQLite file. Receives metadata only; model traffic never transits the relay."

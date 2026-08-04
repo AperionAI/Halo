@@ -12,7 +12,7 @@ members = ["crates/halo-common", "crates/halo-shim", "crates/halo-relay"]
 [workspace.package]
 version = "0.2.2"
 edition = "2021"
-license = "Apache-2.0"
+license-file = "LICENSE"
 authors = ["Aperion <support@aperion.ai>"]
 repository = "https://github.com/AperionAI/halo"
 
