@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "halo-v*"
+  # Lets a release be re-run against an existing tag (e.g. after a workflow
+  # fix) without having to cut a new version.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing halo-v* tag to build/publish against"
+        required: true
 
 permissions:
   contents: write
