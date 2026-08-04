@@ -79,19 +79,41 @@ jobs:
           Compress-Archive -Path $Dist -DestinationPath "$Dist.zip"
           (Get-FileHash "$Dist.zip" -Algorithm SHA256).Hash.ToLower() | Out-File "$Dist.zip.sha256"
 
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
+      # Upload as a build artifact rather than calling action-gh-release here:
+      # 5 matrix jobs hitting the same release concurrently causes "too many
+      # retries" API races. A single downstream `publish` job does the one
+      # real upload after every target has finished building.
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: halo-${{ matrix.target }}
+          path: |
             halo-${{ matrix.target }}.tar.gz
             halo-${{ matrix.target }}.tar.gz.sha256
             halo-${{ matrix.target }}.zip
             halo-${{ matrix.target }}.zip.sha256
+          if-no-files-found: ignore
+
+  publish:
+    name: publish binaries to GitHub Release
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all target artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
           fail_on_unmatched_files: false
 
   mirror:
     name: mirror binaries to public dist repo
-    needs: binaries
+    needs: publish
     runs-on: ubuntu-latest
     # No-op until you set the HALO_DIST_REPO repo variable (owner/name of a
     # PUBLIC, source-free releases repo) and the HALO_DIST_TOKEN secret (a PAT
