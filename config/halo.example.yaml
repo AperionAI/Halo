@@ -9,6 +9,14 @@
 # you deliberately want other machines to reach the proxy.
 listen: "127.0.0.1:8787"
 
+# Local admin dashboard: a loopback-only web UI (savings, agents, settings)
+# bundled into the `halo` binary itself. Free tier, on by default, no
+# network, no account. Reads need nothing; writes (revoke an agent, change
+# settings) require the local token from `halo dashboard token`.
+# dashboard:
+#   enabled: true
+#   listen: "127.0.0.1:8788"
+
 # Minimal hosted relay for the savings dashboard. Omit both to run fully local
 # (budgets, cache, and `halo report` all still work offline).
 # relay_url: "https://halo-relay.example.com"

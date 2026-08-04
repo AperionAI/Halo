@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smartflow Halo — One-Pager — APERION</title>
+<meta name="description" content="Smartflow Halo one-pager: install in one line, point your agent runtime at it, get budgets + kill switch, caching, compression, MCP cloak, and a local dashboard. Free tier, binary-only, built for OpenClaw-scale self-hosted agents.">
+<meta name="keywords" content="Smartflow Halo, self-hosted AI agents, OpenClaw, LLM proxy, budget kill switch, semantic cache, prompt caching, MCP cloak, AI governance, local dashboard">
+<meta name="author" content="APERION">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://docs.aperion.ai/halo-onepager.html">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://docs.aperion.ai/halo-onepager.html">
+<meta property="og:title" content="Smartflow Halo — One-Pager">
+<meta property="og:description" content="Install in one line, point your runtime at it, get budgets, caching, compression, MCP cloak, and a local dashboard. Free tier, binary-only.">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0b1020; color: #e2e8f0; min-height: 100vh; padding: 0 0 40px; }
+.container { max-width: 920px; margin: 0 auto; padding: 24px 20px 40px; }
+
+/* ── TOP NAV (same as rest of docs site) ───────────────────────── */
+.g-topnav { position: sticky; top: 0; z-index: 200; background: rgba(11,16,32,0.96); backdrop-filter: blur(14px); border-bottom: 1px solid #26304a; padding: 0 28px; height: 54px; display: flex; align-items: center; gap: 20px; }
+.g-brand { display: flex; align-items: center; gap: 8px; flex-shrink: 0; text-decoration: none; }
+.g-logo { height: 20px; filter: brightness(0) invert(1); opacity: 0.9; }
+.g-brand-sub { font-size: 0.78em; color: #475569; }
+.g-links { display: flex; align-items: center; gap: 2px; flex: 1; }
+.g-links a { padding: 5px 11px; border-radius: 6px; font-size: 0.85em; color: #64748b; text-decoration: none; transition: all .15s; }
+.g-links a:hover { color: #e2e8f0; background: #1e293b; }
+.g-links a.active { color: #5eead4; }
+.g-badge { background: rgba(15,58,71,0.6); color: #5eead4; font-size: 0.7em; font-weight: 700; padding: 3px 9px; border-radius: 12px; border: 1px solid rgba(45,212,191,0.4); flex-shrink: 0; }
+
+/* ── HEADER ─────────────────────────────────────────────────────── */
+.header { background: linear-gradient(135deg, #0c2a3a 0%, #164e63 45%, #1e1b4b 100%); border-radius: 14px; padding: 38px 40px; margin-bottom: 32px; box-shadow: 0 4px 32px rgba(0,0,0,0.5); text-align: center; position: relative; overflow: hidden; }
+.header::before { content: ''; position: absolute; top: -40px; right: -40px; width: 280px; height: 280px; background: radial-gradient(circle, rgba(45,212,191,0.18) 0%, transparent 70%); }
+.header::after  { content: ''; position: absolute; bottom: -60px; left: -60px; width: 260px; height: 260px; background: radial-gradient(circle, rgba(99,102,241,0.16) 0%, transparent 70%); }
+.version-chip { display: inline-block; background: rgba(15,58,71,0.6); color: #5eead4; font-size: 0.78em; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; padding: 4px 14px; border-radius: 20px; border: 1px solid rgba(45,212,191,0.45); margin-bottom: 16px; position: relative; z-index: 1; }
+.header h1 { color: #fff; font-size: 2.2em; font-weight: 800; letter-spacing: -0.5px; line-height: 1.15; margin-bottom: 10px; position: relative; z-index: 1; }
+.header .tagline { color: #cffafe; font-size: 0.98em; line-height: 1.6; max-width: 720px; margin: 0 auto 18px; position: relative; z-index: 1; }
+.badge-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; position: relative; z-index: 1; }
+.badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 20px; font-size: 0.75em; font-weight: 700; }
+.badge-emerald { background: rgba(15,58,71,0.6); color: #5eead4; border: 1px solid rgba(45,212,191,0.4); }
+.badge-teal    { background: rgba(13,148,136,0.35); color: #5eead4; border: 1px solid rgba(13,148,136,0.4); }
+.badge-blue    { background: rgba(49,46,129,0.5); color: #a5b4fc; border: 1px solid #6366f1; }
+.badge-violet  { background: rgba(76,29,149,0.4); color: #c4b5fd; border: 1px solid rgba(139,92,246,0.4); }
+
+/* ── HEADLINE NUMBERS ─────────────────────────── */
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 32px; }
+.kpi { background: linear-gradient(135deg, #131a2e 0%, #0b1020 100%); border: 1px solid #26304a; border-radius: 10px; padding: 16px 14px; text-align: center; }
+.kpi .v { font-size: 1.5em; font-weight: 800; line-height: 1.1; }
+.kpi .l { font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.9px; color: #93a0bd; margin-top: 4px; font-weight: 700; }
+.kpi.allow    .v { color: #5eead4; }
+.kpi.warn     .v { color: #fde68a; }
+.kpi.approval .v { color: #a5b4fc; }
+.kpi.block    .v { color: #4ade80; }
+@media (max-width: 700px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
+
+/* ── SECTION HEADINGS ───────────────────────────────────────────── */
+.area-heading { font-size: 0.7em; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #64748b; margin: 36px 0 14px; display: flex; align-items: center; gap: 10px; }
+.area-heading::after { content: ''; flex: 1; height: 1px; background: #1e293b; }
+
+/* ── INSTALL THREE-UP ───────────────────────────────────────────── */
+.install-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+.install-card { background: linear-gradient(135deg, #131a2e 0%, #0b1020 100%); border: 1px solid #26304a; border-radius: 10px; padding: 16px 16px; }
+.install-card.brew   { border-color: #0e7490; }
+.install-card.docker { border-color: #1d4ed8; }
+.install-card.cargo  { border-color: #6366f1; }
+.install-card .head  { font-size: 0.85em; font-weight: 700; color: #f1f5f9; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.install-card.brew   .head { color: #5eead4; }
+.install-card.docker .head { color: #93c5fd; }
+.install-card.cargo  .head { color: #a5b4fc; }
+.install-card pre    { font-family: 'Courier New', monospace; font-size: 0.78em; color: #cbd5e1; background: #070b16; border: 1px solid #1e293b; border-radius: 6px; padding: 8px 10px; overflow-x: auto; white-space: pre; line-height: 1.55; }
+@media (max-width: 700px) { .install-grid { grid-template-columns: 1fr; } }
+
+/* ── FEATURE CARDS ──────────────────────────────────────────────── */
+.feature { background: linear-gradient(135deg, #131a2e 0%, #0b1020 100%); border: 1px solid #26304a; border-radius: 12px; padding: 20px 24px; margin-bottom: 12px; }
+.feature.new     { border-color: #0d9488; }
+.feature.infra   { border-color: #4338ca; }
+.feature.security{ border-color: #0369a1; }
+.feature-header  { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 10px; }
+.feature-num     { font-size: 0.74em; font-weight: 800; min-width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+.feature-num.emerald { background: linear-gradient(135deg, #042f2e, #0d9488); color: #5eead4; }
+.feature-num.teal    { background: linear-gradient(135deg, #042f2e, #0d9488); color: #5eead4; }
+.feature-num.blue    { background: linear-gradient(135deg, #1e1b4b, #4338ca); color: #a5b4fc; }
+.feature-num.pink    { background: linear-gradient(135deg, #0c2a3a, #0369a1); color: #7dd3fc; }
+.feature-title-wrap { flex: 1; }
+.feature-title   { font-size: 1.04em; font-weight: 700; color: #f1f5f9; margin-bottom: 2px; }
+.feature-body    { color: #93a0bd; font-size: 0.88em; line-height: 1.65; }
+.feature-body code { color: #5eead4; font-size: 0.92em; background: rgba(45,212,191,0.08); padding: 1px 5px; border-radius: 4px; font-family: 'Courier New', monospace; }
+.feature-body strong { color: #cbd5e1; }
+.feature-body ul { margin: 6px 0 6px 22px; }
+.feature-body li { margin-bottom: 3px; }
+.area-tag { display: inline-block; font-size: 0.66em; font-weight: 700; padding: 2px 8px; border-radius: 8px; margin-left: auto; flex-shrink: 0; align-self: flex-start; margin-top: 4px; }
+.tag-new      { background: rgba(15,58,71,0.6); color: #5eead4; border: 1px solid rgba(45,212,191,0.3); }
+.tag-infra    { background: rgba(30,27,75,0.8); color: #a5b4fc; border: 1px solid rgba(67,56,202,0.4); }
+.tag-security { background: rgba(12,42,58,0.8); color: #7dd3fc; border: 1px solid rgba(3,105,161,0.3); }
+
+/* ── CODE BLOCK ──────────────────── */
+.code-block { background: #070b16; border: 1px solid #1e293b; border-radius: 8px; padding: 14px 16px; font-family: 'Courier New', monospace; font-size: 0.82em; color: #cbd5e1; overflow-x: auto; line-height: 1.6; margin: 10px 0 18px; }
+.code-block .cm  { color: #64748b; }
+.code-block .k   { color: #5eead4; }
+.code-block .s   { color: #fde68a; }
+.code-block .n   { color: #a5b4fc; }
+
+/* ── TWO-COL GRID ───────────────────────────────────────────────── */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 12px; }
+@media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+
+/* ── CLI CHEAT-SHEET TABLE ──────────────────────────────────────── */
+.table-wrap { overflow-x: auto; margin-bottom: 24px; }
+table.cheat { width: 100%; border-collapse: collapse; font-size: 0.82em; }
+table.cheat thead th { background: #131a2e; color: #64748b; text-transform: uppercase; font-size: 0.7em; letter-spacing: 0.6px; padding: 8px 12px; text-align: left; border-bottom: 2px solid #26304a; }
+table.cheat tbody tr { border-bottom: 1px solid #1e293b; }
+table.cheat tbody td { padding: 7px 12px; color: #cbd5e1; vertical-align: top; }
+table.cheat code { color: #5eead4; background: rgba(45,212,191,0.08); padding: 1px 5px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 0.92em; white-space: nowrap; }
+table.cheat td.muted { color: #93a0bd; }
+
+/* ── ARCHITECTURE ASCII ─────────────────────────────────────────── */
+.arch { background: #070b16; border: 1px solid #1e293b; border-radius: 8px; padding: 14px 18px; font-family: 'Courier New', monospace; font-size: 0.78em; color: #cbd5e1; line-height: 1.55; white-space: pre; overflow-x: auto; margin: 8px 0 24px; }
+.arch .acc { color: #5eead4; }
+.arch .sub { color: #64748b; }
+
+/* ── FREE vs PAID COMPARISON ──────────────────────── */
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+.compare > div { background: linear-gradient(135deg, #131a2e 0%, #0b1020 100%); border: 1px solid #26304a; border-radius: 10px; padding: 16px 20px; }
+.compare .free { border-color: #0d9488; }
+.compare .paid { border-color: #4338ca; }
+.compare h4    { font-size: 0.78em; font-weight: 800; letter-spacing: 0.8px; text-transform: uppercase; margin-bottom: 8px; }
+.compare .free h4 { color: #5eead4; }
+.compare .paid h4 { color: #a5b4fc; }
+.compare ul    { margin: 0; padding: 0 0 0 18px; font-size: 0.86em; color: #cbd5e1; line-height: 1.7; }
+.compare li::marker { color: #475569; }
+@media (max-width: 700px) { .compare { grid-template-columns: 1fr; } }
+
+/* ── MARKET COMPARISON TABLE ─────────────────────── */
+table.market { width: 100%; border-collapse: collapse; font-size: 0.82em; margin-bottom: 24px; }
+table.market thead th { background: #131a2e; color: #64748b; text-transform: uppercase; font-size: 0.68em; letter-spacing: 0.5px; padding: 9px 12px; text-align: left; border-bottom: 2px solid #26304a; }
+table.market thead th.us { color: #5eead4; }
+table.market tbody tr { border-bottom: 1px solid #1e293b; }
+table.market tbody td { padding: 9px 12px; color: #cbd5e1; vertical-align: top; font-size: 0.94em; }
+table.market tbody td.us { color: #5eead4; font-weight: 600; }
+table.market tbody td.row-label { color: #f1f5f9; font-weight: 600; white-space: nowrap; }
+table.market .no { color: #64748b; }
+
+/* ── FOOTER ─────────────────────────────────────────────────────── */
+.footer { text-align: center; padding: 28px 0 12px; color: #475569; font-size: 0.78em; }
+.footer a { color: #5eead4; text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+
+/* ── PDF EXPORT TOOLBAR (screen only) ───────────────────────────── */
+.pdf-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; margin: 0 auto 16px; max-width: 920px; background: linear-gradient(135deg, #131a2e 0%, #0b1020 100%); border: 1px solid #26304a; border-radius: 10px; font-size: 0.85em; color: #93a0bd; }
+.pdf-toolbar .pdf-label { font-weight: 700; color: #cbd5e1; margin-right: 4px; }
+.pdf-toolbar button { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 7px; border: 1px solid; cursor: pointer; font-family: inherit; font-size: 0.92em; font-weight: 700; transition: transform .12s, box-shadow .12s; }
+.pdf-toolbar button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+.pdf-toolbar button.btn-dark  { background: linear-gradient(135deg, #0c2a3a 0%, #164e63 100%); border-color: #2dd4bf; color: #cffafe; }
+.pdf-toolbar button.btn-light { background: #f1f5f9; border-color: #cbd5e1; color: #0f172a; }
+.pdf-toolbar button.btn-cli   { background: #1e293b; border-color: #475569; color: #cbd5e1; }
+.pdf-toolbar .toast { margin-left: auto; font-size: 0.85em; color: #5eead4; opacity: 0; transition: opacity .25s; }
+.pdf-toolbar .toast.show { opacity: 1; }
+@media (max-width: 700px) { .pdf-toolbar { font-size: 0.78em; } .pdf-toolbar .toast { margin-left: 0; flex-basis: 100%; } }
+@media print { .pdf-toolbar { display: none !important; } }
+</style>
+
+<style id="print-light" media="print">
+  @page { size: Letter; margin: 0.5in; }
+  html, body { background: #fff !important; color: #1e293b !important; }
+  body { padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 11pt; }
+  .container { max-width: none; padding: 0; }
+  .g-topnav { display: none; }
+  .header { background: #0c2a3a !important; padding: 28px 28px; margin-bottom: 18px; box-shadow: none; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .header h1, .header .tagline, .version-chip { color: #fff !important; }
+  .header .tagline { color: #cffafe !important; }
+  .header::before, .header::after { display: none; }
+  .area-heading { color: #475569 !important; margin: 18px 0 8px; }
+  .area-heading::after { background: #cbd5e1 !important; }
+  .feature, .install-card, .kpi, .compare > div { background: #fff !important; border: 1px solid #cbd5e1 !important; color: #1e293b !important; box-shadow: none !important; page-break-inside: avoid; }
+  .arch, .code-block { background: #f1f5f9 !important; border: 1px solid #cbd5e1 !important; color: #1e293b !important; page-break-inside: avoid; }
+  .feature-title, .install-card .head, .compare h4 { color: #0f172a !important; }
+  .feature-body, .feature-body strong, .compare ul { color: #334155 !important; }
+  .feature-body code, table.cheat code, table.market code { color: #0f766e !important; background: #f1f5f9 !important; }
+  .code-block .cm, .arch .sub { color: #64748b !important; }
+  .code-block .k, .arch .acc  { color: #0f766e !important; }
+  .code-block .s, .install-card.brew  .head { color: #0e7490 !important; }
+  .code-block .n, .install-card.cargo .head { color: #4338ca !important; }
+  .install-card.docker .head { color: #1e40af !important; }
+  .kpi.allow    .v { color: #0f766e !important; }
+  .kpi.approval .v { color: #4338ca !important; }
+  .kpi.block    .v { color: #15803d !important; }
+  .kpi.warn     .v { color: #b45309 !important; }
+  .kpi .l       { color: #475569 !important; }
+  table.cheat thead th, table.cheat tbody td, table.market thead th, table.market tbody td { color: #1e293b !important; background: #fff !important; border-color: #cbd5e1 !important; }
+  table.cheat thead th, table.market thead th { background: #f1f5f9 !important; }
+  table.market tbody td.us { color: #0f766e !important; }
+  .badge { border: 1px solid #cbd5e1; }
+  .badge-emerald { background: #ccfbf1 !important; color: #115e59 !important; }
+  .badge-teal    { background: #ccfbf1 !important; color: #115e59 !important; }
+  .badge-blue    { background: #e0e7ff !important; color: #3730a3 !important; }
+  .badge-violet  { background: #ede9fe !important; color: #5b21b6 !important; }
+  .footer { color: #64748b !important; }
+  .footer a { color: #0f766e !important; }
+  .feature, .compare > div, .install-card, .kpi-row, .arch, .code-block, table.cheat, table.market { page-break-inside: avoid; }
+  .area-heading + .feature, .area-heading + .install-grid, .area-heading + .kpi-row { page-break-before: avoid; }
+  h1, h2, .area-heading { page-break-after: avoid; }
+</style>
+
+<style id="print-dark" media="not all">
+  @page { size: Letter; margin: 0.4in; background: #0b1020; }
+  html, body { background: #0b1020 !important; color: #e2e8f0 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  body * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  body { padding: 0; font-size: 11pt; }
+  .container { max-width: none; padding: 0 0.1in; }
+  .g-topnav { display: none; }
+  .header { background: linear-gradient(135deg, #0c2a3a 0%, #164e63 45%, #1e1b4b 100%), #0c2a3a !important; box-shadow: none !important; }
+  .feature, .install-card, .kpi, .compare > div, .arch, .code-block { box-shadow: none !important; page-break-inside: avoid; }
+  .feature, .compare > div, .install-card, .kpi-row, .arch, .code-block, table.cheat, table.market { page-break-inside: avoid; }
+  h1, h2, .area-heading { page-break-after: avoid; }
+</style>
+</head>
+<body>
+
+<nav class="g-topnav">
+  <a href="index.html" class="g-brand">
+    <img src="langsmart-logo.svg" alt="APERION" class="g-logo">
+    <span class="g-brand-sub">/ Aperion Docs</span>
+  </a>
+  <div class="g-links">
+    <a href="index.html">Home</a>
+    <a href="smartflow-platform-overview.html">Smartflow Docs</a>
+    <a href="aperion-shield.html">Aperion Shield</a>
+    <a href="index.html#support">Support</a>
+  </div>
+  <span class="g-badge">v1.2 — One-Pager</span>
+</nav>
+
+<div class="container">
+
+  <div class="pdf-toolbar" role="toolbar" aria-label="PDF export controls">
+    <span class="pdf-label"><i class="fas fa-file-pdf"></i>&nbsp;Save as PDF:</span>
+    <button class="btn-dark"  type="button" id="btn-pdf-dark"  title="Preserve the site's dark theme">
+      <i class="fas fa-moon"></i>&nbsp;Dark (matches site)
+    </button>
+    <button class="btn-light" type="button" id="btn-pdf-light" title="White-background handout, ink-friendly">
+      <i class="fas fa-sun"></i>&nbsp;Light (handout)
+    </button>
+    <button class="btn-cli"   type="button" id="btn-pdf-cli"   title="Copy a headless-Chrome command for CLI / CI use">
+      <i class="fas fa-terminal"></i>&nbsp;Copy CLI command
+    </button>
+    <span class="toast" id="pdf-toast" aria-live="polite"></span>
+  </div>
+
+  <!-- ─────── HEADER ─────── -->
+  <div class="header">
+    <div class="version-chip">Smartflow Halo · v1.2 · One-Pager</div>
+    <h1>Runtime governance for self-hosted<br>AI agents, in one binary.</h1>
+    <p class="tagline">
+      Halo sits between your agent runtime and the model providers (and your MCP servers). Budgets with a real kill switch, exact + cross-provider semantic caching, compression, MCP secret cloaking, and a local dashboard — no cloud, no account, and <strong>no model of any kind running inside the process</strong>. Free tier, forever.
+    </p>
+    <div class="badge-row">
+      <span class="badge badge-emerald"><i class="fas fa-code-branch"></i>&nbsp;Free tier, forever</span>
+      <span class="badge badge-teal"><i class="fas fa-gauge-high"></i>&nbsp;Hard-cap kill switch</span>
+      <span class="badge badge-blue"><i class="fas fa-desktop"></i>&nbsp;macOS · Linux · Windows</span>
+      <span class="badge badge-violet"><i class="fab fa-rust"></i>&nbsp;65 tests · 0 LLMs bundled</span>
+    </div>
+  </div>
+
+  <!-- ─────── HEADLINE KPI ─────── -->
+  <div class="area-heading">What one binary replaces</div>
+  <div class="kpi-row">
+    <div class="kpi allow">    <div class="v">100%</div> <div class="l">Local-only free tier</div></div>
+    <div class="kpi warn">     <div class="v">2</div>    <div class="l">Cache layers (exact + semantic)</div></div>
+    <div class="kpi approval"> <div class="v">5</div>    <div class="l">Platforms (macOS/Linux/Win, arm64+x64)</div></div>
+    <div class="kpi block">    <div class="v">$0</div>  <div class="l">Cost of the free tier, ever</div></div>
+  </div>
+
+  <!-- ─────── INSTALL (3 routes) ─────── -->
+  <div class="area-heading">Install (pick one)</div>
+  <div class="install-grid">
+    <div class="install-card brew">
+      <div class="head"><i class="fas fa-terminal"></i>&nbsp;curl | sh</div>
+      <pre>curl -fsSL \
+  https://halo-get.aperion.ai | sh</pre>
+    </div>
+    <div class="install-card docker">
+      <div class="head"><i class="fab fa-docker"></i>&nbsp;Docker</div>
+      <pre>docker run --rm \
+  -v halo-data:/data -p 8787:8787 \
+  ghcr.io/aperionai/halo</pre>
+    </div>
+    <div class="install-card cargo">
+      <div class="head"><i class="fab fa-windows"></i>&nbsp;Windows</div>
+      <pre>Grab the .zip from
+github.com/AperionAI/halo-dist
+/releases</pre>
+    </div>
+  </div>
+  <div class="feature-body" style="margin-bottom: 8px;">
+    Source is closed, but the binaries and Docker image are fully public — no
+    GitHub auth needed for any install path. Full detail in <code>docs/INSTALL.md</code>.
+  </div>
+
+  <!-- ─────── 60-SECOND INTEGRATION ─────── -->
+  <div class="area-heading">60-second integration</div>
+
+  <div class="feature new">
+    <div class="feature-header">
+      <div class="feature-num emerald">01</div>
+      <div class="feature-title-wrap">
+        <div class="feature-title">Register an agent, point your runtime at Halo</div>
+      </div>
+      <span class="area-tag tag-new">OpenAI / Anthropic / OpenClaw</span>
+    </div>
+    <div class="feature-body">
+      Halo mints a virtual key mapped to your real provider key (stored in your OS keychain — never on disk). Swap two env vars and every call now flows through budgets, caching, and compression:
+    </div>
+<div class="code-block"><span class="cm"># 1. Register — the real key goes straight to your OS keychain.</span>
+halo agent add researcher --provider openai --key sk-...
+
+<span class="cm"># 2. Point your runtime at Halo instead of the provider.</span>
+<span class="k">export</span> OPENAI_API_KEY=<span class="s">sf_live_researcher_...</span>   <span class="cm"># virtual key printed above</span>
+<span class="k">export</span> OPENAI_BASE_URL=<span class="n">http://127.0.0.1:8787/v1</span>
+
+<span class="cm"># 3. Run it. Any OpenAI-compatible third party works too (Groq, Together,</span>
+<span class="cm">#    Fireworks, a local vLLM/Ollama server) via --base-url on agent add.</span>
+halo serve</div>
+    <div class="feature-body">
+      Anthropic works identically (<code>--provider anthropic</code>, <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787</code>). Streaming passes through live, never buffered.
+    </div>
+  </div>
+
+  <!-- ─────── ARCHITECTURE ─────── -->
+  <div class="area-heading">How it sees the traffic</div>
+  <div class="arch"><span class="sub">Your agent runtime (OpenClaw, a custom agent, ...)</span>
+       <span class="acc">│</span> OpenAI/Anthropic-shaped HTTP, virtual key
+       <span class="acc">▼</span>
+<span class="acc">┌────────────────────────────────────────────────────────────┐</span>
+<span class="acc">│</span> halo serve            <span class="sub">  ← ~/.halo/config.yaml</span>              <span class="acc">│</span>
+<span class="acc">│</span>   ┌──────────────────────────────────────────────────────┐ <span class="acc">│</span>
+<span class="acc">│</span>   <span class="acc">│</span>  budget check (hard-cap kill switch, always local)   <span class="acc">│</span> <span class="acc">│</span>
+<span class="acc">│</span>   <span class="acc">│</span>  exact-match cache  →  semantic cache (cross-provider) <span class="acc">│</span> <span class="acc">│</span>
+<span class="acc">│</span>   <span class="acc">│</span>  compression + Anthropic cache_control injection      <span class="acc">│</span> <span class="acc">│</span>
+<span class="acc">│</span>   <span class="acc">│</span>  MCP cloak/taint at the tool-call seam                <span class="acc">│</span> <span class="acc">│</span>
+<span class="acc">│</span>   └──────────────────────────────────────────────────────┘ <span class="acc">│</span>
+<span class="acc">│</span>   local dashboard :8788      metadata-only telemetry     <span class="acc">│</span>
+<span class="acc">└────────────────────────────────────────────────────────────┘</span>
+       <span class="acc">▼</span>                              <span class="acc">▼</span>
+<span class="sub">real provider (OpenAI, Anthropic, ...)</span>   <span class="sub">optional relay (savings dashboard)</span></div>
+
+  <!-- ─────── CORE FEATURES ─────── -->
+  <div class="area-heading">What's inside (all free, all local)</div>
+  <div class="two-col">
+    <div class="feature security">
+      <div class="feature-header">
+        <div class="feature-num pink">02</div>
+        <div class="feature-title-wrap"><div class="feature-title">Budgets & kill switch</div></div>
+        <span class="area-tag tag-security">never offline</span>
+      </div>
+      <div class="feature-body">
+        Global + per-agent soft/hard caps over a rolling window. The hard cap is enforced <strong>locally and always</strong> — a single request can't overshoot it, and it doesn't depend on any relay being reachable. <code>halo kill &lt;agent&gt;</code> revokes a key instantly; streaming gets a mid-stream stop-loss too.
+      </div>
+    </div>
+    <div class="feature new">
+      <div class="feature-header">
+        <div class="feature-num emerald">03</div>
+        <div class="feature-title-wrap"><div class="feature-title">Two-layer caching</div></div>
+        <span class="area-tag tag-new">cross-provider</span>
+      </div>
+      <div class="feature-body">
+        Exact-match cache for byte-identical repeats, plus an optional <strong>semantic cache</strong> that catches reworded repeats — even across providers, so an answer first generated by Anthropic can serve a later OpenAI-routed request. Cosine similarity is always re-checked at request time; no vector fuzziness ships without a live re-verify.
+      </div>
+    </div>
+  </div>
+  <div class="two-col">
+    <div class="feature new">
+      <div class="feature-header">
+        <div class="feature-num teal">04</div>
+        <div class="feature-title-wrap"><div class="feature-title">Compression & prompt-cache injection</div></div>
+      </div>
+      <div class="feature-body">
+        Meaning-preserving phrase reduction + whitespace collapsing shrink the wire body. Anthropic <code>cache_control</code> breakpoints get injected on large/repeated system prompts, tool defs, and attachments. This is the baseline savings floor — it applies even at a 0% cache-hit rate.
+      </div>
+    </div>
+    <div class="feature security">
+      <div class="feature-header">
+        <div class="feature-num blue">05</div>
+        <div class="feature-title-wrap"><div class="feature-title">MCP cloak & taint</div></div>
+        <span class="area-tag tag-security">secret-safe</span>
+      </div>
+      <div class="feature-body">
+        Halo fronts your MCP servers. Reference secrets in tool args as <code>{{cloak:NAME}}</code>; Halo resolves them only on the copy sent upstream and scrubs leaked values out of results. Reused directly from <a href="https://github.com/AperionAI/shield" style="color:#5eead4;">Aperion Shield</a>'s cloak/taint engine — not rebuilt.
+      </div>
+    </div>
+  </div>
+  <div class="feature infra">
+    <div class="feature-header">
+      <div class="feature-num blue">06</div>
+      <div class="feature-title-wrap"><div class="feature-title">Local dashboard — new in v1.2</div></div>
+      <span class="area-tag tag-infra">http://127.0.0.1:8788</span>
+    </div>
+    <div class="feature-body">
+      A second, loopback-only web UI bundled into the same binary: live spend/savings, cache-hit rate, agent list with one-click revoke, and a settings editor for budgets/cache/relay — all reading the exact same free-tier local data as <code>halo status</code>/<code>halo report</code>. Reads need nothing beyond loopback access; writes require a local-only token from <code>halo dashboard token</code> that never leaves the machine.
+    </div>
+  </div>
+
+  <!-- ─────── CLI CHEAT-SHEET ─────── -->
+  <div class="area-heading">CLI cheat-sheet</div>
+  <div class="table-wrap">
+    <table class="cheat">
+      <thead><tr><th style="width: 34%;">Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>halo agent add &lt;name&gt;</code></td>   <td class="muted">Register an agent, mint a virtual key, store the real key in your OS keychain.</td></tr>
+        <tr><td><code>halo serve</code></td>                    <td class="muted">Run the proxy + the local dashboard (both on by default).</td></tr>
+        <tr><td><code>halo status</code></td>                   <td class="muted">Live spend by agent and current caps.</td></tr>
+        <tr><td><code>halo report</code></td>                   <td class="muted">Local COGS/savings view — works fully offline.</td></tr>
+        <tr><td><code>halo kill &lt;agent&gt;</code></td>       <td class="muted">Emergency stop: revoke a key, refused at once, zero network required.</td></tr>
+        <tr><td><code>halo dashboard token</code></td>          <td class="muted">Print (or <code>--regenerate</code>) the local token that gates dashboard writes.</td></tr>
+        <tr><td><code>halo embeddings set-key</code></td>       <td class="muted">Store the embedding API credential used by the semantic cache.</td></tr>
+        <tr><td><code>halo license show</code></td>             <td class="muted">Current tier, entitled features, and expiry.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ─────── FREE vs PAID ─────── -->
+  <div class="area-heading">Free vs Paid</div>
+  <div class="compare">
+    <div class="free">
+      <h4><i class="fas fa-code-branch"></i> &nbsp;Free tier (this binary)</h4>
+      <ul>
+        <li>Local budgets, hard-cap kill switch, <code>halo kill</code> — uncapped, always</li>
+        <li>Exact-match cache, semantic cache (capped entries)</li>
+        <li>Compression + Anthropic prompt-cache injection</li>
+        <li>MCP cloak/taint, tamper-evident local audit log</li>
+        <li><code>halo report</code> + the local dashboard, both fully offline</li>
+        <li>Up to 3 registered agents (<code>halo agent add</code>)</li>
+        <li>No account, no telemetry beyond opt-in metadata to your own relay</li>
+      </ul>
+    </div>
+    <div class="paid">
+      <h4><i class="fas fa-layer-group"></i> &nbsp;Paid license ($50–100/mo)</h4>
+      <ul>
+        <li><strong>Unlimited registered agents</strong> — the cap a solo power user hits first</li>
+        <li>Higher semantic-cache entry cap</li>
+        <li>Budget alerting webhooks</li>
+        <li>Best-effort remote kill (pull-based revoke from the relay)</li>
+        <li>Relay multi-seat tokens</li>
+        <li>Hosted per-channel / sub-agent cost drill-down</li>
+        <li>Offline, Ed25519-signed license key — no phone-home, ever</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ─────── VALUE VS THE MARKET ─────── -->
+  <div class="area-heading">Why Halo instead of...</div>
+  <table class="market">
+    <thead><tr><th>Capability</th><th class="us">Halo</th><th>LiteLLM proxy</th><th>Hosted gateways (Portkey / Helicone)</th><th>Raw SDK, no proxy</th></tr></thead>
+    <tbody>
+      <tr><td class="row-label">Local hard-cap kill switch</td><td class="us">Built in, offline-first</td><td class="no">Soft budgets, no offline guarantee</td><td class="no">Depends on their uptime</td><td class="no">None</td></tr>
+      <tr><td class="row-label">Cross-provider semantic cache</td><td class="us">Built in, free (capped)</td><td class="no">Not built in</td><td class="no">Enterprise-tier add-on</td><td class="no">None</td></tr>
+      <tr><td class="row-label">MCP secret cloaking</td><td class="us">Built in (Shield-derived)</td><td class="no">Not built in</td><td class="no">Not built in</td><td class="no">None</td></tr>
+      <tr><td class="row-label">Provider keys leave your machine</td><td class="us">Never</td><td class="no">Depends on deployment</td><td class="no">Traffic transits their cloud</td><td class="no">N/A</td></tr>
+      <tr><td class="row-label">Runs a model to do its job</td><td class="us">Never — zero LLM deps</td><td class="no">No</td><td class="no">No</td><td class="no">N/A</td></tr>
+      <tr><td class="row-label">Free tier ceiling</td><td class="us">Safety net uncapped forever; 3 agents</td><td class="no">Open source but no managed budgets/cache</td><td class="no">Usage-metered from day one</td><td class="no">No governance at all</td></tr>
+    </tbody>
+  </table>
+  <div class="feature-body" style="margin-bottom: 8px;">
+    The honest comparison: LiteLLM is a strong, more general routing layer without Halo's local budget/cache/cloak stack baked in; hosted gateways add real observability but put your traffic through their cloud and meter you immediately. Halo is narrower on purpose — one binary, one job, free forever for the self-hoster, with a paid tier that only adds hosted/fleet conveniences on top.
+  </div>
+
+  <!-- ─────── BUILD + LINKS ─────── -->
+  <div class="area-heading">Build from source · references</div>
+  <div class="feature infra">
+    <div class="feature-header">
+      <div class="feature-num blue">07</div>
+      <div class="feature-title-wrap"><div class="feature-title">From a fresh checkout (licensees with repo access)</div></div>
+      <span class="area-tag tag-infra">build</span>
+    </div>
+    <div class="feature-body">Rust 1.75+ stable. Own workspace, lean dependency tree, <code>redb</code>/SQLite single-file stores — no Redis, no Mongo, no Postgres.</div>
+<div class="code-block">cargo build --release
+./target/release/halo --version
+cargo test --release    <span class="cm"># 65 tests, all green</span></div>
+    <div class="feature-body">
+      <strong>Public binaries:</strong> <a href="https://github.com/AperionAI/halo-dist/releases" style="color: #5eead4;">github.com/AperionAI/halo-dist/releases</a> &nbsp;·&nbsp;
+      <strong>Container:</strong> <code>ghcr.io/aperionai/halo</code> &nbsp;·&nbsp;
+      <strong>Install guide:</strong> <code>docs/INSTALL.md</code> &nbsp;·&nbsp;
+      <strong>Design notes:</strong> <code>docs/DESIGN_REVIEW.md</code>
+    </div>
+  </div>
+
+  <div class="footer">
+    Smartflow Halo is free (binary-only) for the local proxy &nbsp;·&nbsp; built by <a href="https://aperion.ai">APERION</a> &nbsp;·&nbsp;
+    Use the toolbar above to save this page as a PDF (dark or light handout).
+  </div>
+
+</div>
+
+<script>
+(function () {
+  var light = document.getElementById('print-light');
+  var dark  = document.getElementById('print-dark');
+  var toast = document.getElementById('pdf-toast');
+
+  function showToast(msg) {
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.classList.add('show');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(function () { toast.classList.remove('show'); }, 2200);
+  }
+
+  function setDarkPrint(on) {
+    if (!light || !dark) return;
+    if (on) { light.media = 'not all'; dark.media = 'print'; }
+    else    { light.media = 'print';   dark.media = 'not all'; }
+  }
+
+  try {
+    var params = new URLSearchParams(window.location.search);
+    if ((params.get('theme') || '').toLowerCase() === 'dark') setDarkPrint(true);
+  } catch (_) { /* old browser, ignore */ }
+
+  function wire(id, fn) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('click', fn);
+  }
+
+  wire('btn-pdf-light', function () {
+    setDarkPrint(false);
+    showToast('Opening print dialog · choose "Save as PDF"');
+    setTimeout(function () { window.print(); }, 60);
+  });
+
+  wire('btn-pdf-dark', function () {
+    setDarkPrint(true);
+    showToast('Dark theme enabled · choose "Save as PDF" and tick "Background graphics"');
+    setTimeout(function () {
+      window.print();
+      setTimeout(function () { setDarkPrint(false); }, 800);
+    }, 60);
+  });
+
+  wire('btn-pdf-cli', function () {
+    var url = window.location.origin + window.location.pathname + '?theme=dark';
+    var cmd = [
+      '# Headless Chrome — generates a dark PDF identical to the site',
+      '/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome \\',
+      '  --headless=new --disable-gpu --no-pdf-header-footer \\',
+      '  --virtual-time-budget=10000 \\',
+      '  --print-to-pdf=halo-onepager-dark.pdf \\',
+      '  "' + url + '"'
+    ].join('\n');
+    var ok = false;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(cmd).then(
+        function () { showToast('CLI command copied to clipboard'); },
+        function () { fallback(); }
+      );
+      ok = true;
+    }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = cmd; ta.setAttribute('readonly',''); ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); showToast('CLI command copied'); }
+      catch (e) { window.prompt('Copy this command:', cmd); }
+      document.body.removeChild(ta);
+    }
+    if (!ok) fallback();
+  });
+})();
+</script>
+
+</body>
+</html>

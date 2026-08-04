@@ -74,6 +74,12 @@ pub struct Config {
     /// product. Override here for anything the built-in table gets wrong.
     #[serde(default)]
     pub price_overrides: Vec<PriceOverride>,
+
+    /// The local admin dashboard: a loopback-only web UI for viewing savings/
+    /// logs and editing settings, bundled into the `halo` binary itself (no
+    /// relay, no network, no account -- free tier). See `dashboard.rs`.
+    #[serde(default)]
+    pub dashboard: DashboardConfig,
 }
 
 fn default_listen() -> String {
@@ -94,6 +100,34 @@ impl Default for Config {
             compression: CompressionConfig::default(),
             mcp_servers: Vec::new(),
             price_overrides: Vec::new(),
+            dashboard: DashboardConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardConfig {
+    /// On by default -- it's loopback-only and free, so there's no reason to
+    /// make a user opt in. Set false to disable entirely.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Separate port from `listen` (the LLM-facing ingress) on purpose: the
+    /// dashboard is an admin surface, the proxy is the hot path, and mixing
+    /// them on one router would mean every dashboard route has to be proven
+    /// safe against the same threat model as untrusted agent traffic.
+    #[serde(default = "default_dashboard_listen")]
+    pub listen: String,
+}
+
+fn default_dashboard_listen() -> String {
+    "127.0.0.1:8788".to_string()
+}
+
+impl Default for DashboardConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            listen: default_dashboard_listen(),
         }
     }
 }
@@ -329,6 +363,12 @@ impl Paths {
     }
     pub fn cred_fallback(&self) -> PathBuf {
         self.base.join("cred-fallback.json")
+    }
+    /// Local bearer token gating dashboard *mutations* (settings writes,
+    /// agent revoke). Generated on first use; never transmitted anywhere but
+    /// the loopback dashboard itself.
+    pub fn dashboard_token(&self) -> PathBuf {
+        self.base.join("dashboard-token")
     }
 }
 

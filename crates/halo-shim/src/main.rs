@@ -9,6 +9,7 @@ mod cache_control;
 mod cachekey;
 mod compress;
 mod config;
+mod dashboard;
 mod embeddings;
 mod ingress;
 mod keys;
@@ -69,6 +70,22 @@ enum Cmd {
     License {
         #[command(subcommand)]
         action: LicenseCmd,
+    },
+    /// Manage the local admin dashboard (http://127.0.0.1:8788 by default).
+    Dashboard {
+        #[command(subcommand)]
+        action: DashboardCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum DashboardCmd {
+    /// Print the local token required to change settings or revoke an agent
+    /// from the dashboard. Read-only views need no token (loopback-only).
+    Token {
+        /// Discard the existing token and mint a new one.
+        #[arg(long)]
+        regenerate: bool,
     },
 }
 
@@ -174,7 +191,26 @@ async fn main() -> Result<()> {
         Cmd::Kill { agent } => kill(paths, &agent),
         Cmd::Embeddings { action } => embeddings_cmd(paths, action),
         Cmd::License { action } => license_cmd(paths, action),
+        Cmd::Dashboard { action } => dashboard_cmd(paths, action),
     }
+}
+
+fn dashboard_cmd(paths: Paths, action: DashboardCmd) -> Result<()> {
+    match action {
+        DashboardCmd::Token { regenerate } => {
+            if regenerate {
+                let _ = std::fs::remove_file(paths.dashboard_token());
+            }
+            let token = dashboard::load_or_create_token(&paths)?;
+            println!("{token}");
+            eprintln!(
+                "\nUse this as the Bearer token / 'dashboard token' field to change \
+                 settings or revoke an agent from the dashboard. It never leaves this \
+                 machine; `--regenerate` mints a new one (invalidating the old)."
+            );
+        }
+    }
+    Ok(())
 }
 
 fn license_cmd(paths: Paths, action: LicenseCmd) -> Result<()> {
@@ -199,8 +235,11 @@ fn license_cmd(paths: Paths, action: LicenseCmd) -> Result<()> {
                 println!(
                     "\nThe free tier includes budgets + kill switch, exact-match cache, \n\
                      compression, prompt-cache injection, MCP cloak/taint, local audit \n\
-                     and `halo report` -- all fully functional. A paid license adds the \n\
-                     features above. Set `license_key` in ~/.halo/config.yaml to activate."
+                     and `halo report` -- all fully functional, unlimited, forever. The \n\
+                     one scale cap: up to {} registered agents (`halo agent add`). A paid \n\
+                     license adds the features above. Set `license_key` in \n\
+                     ~/.halo/config.yaml to activate.",
+                    halo_common::license::FREE_AGENT_LIMIT
                 );
             }
         }
@@ -302,10 +341,27 @@ fn embeddings_cmd(paths: Paths, action: EmbeddingsCmd) -> Result<()> {
     Ok(())
 }
 
+/// Pure gate for the free-tier agent-count cap, split out from `agent_cmd`
+/// so it's testable without touching the filesystem/keychain. `active_count`
+/// is the number of already-active agents *before* adding the new one.
+fn check_agent_cap(active_count: usize, entitlements: &halo_common::Entitlements) -> Result<()> {
+    if entitlements.has(halo_common::license::feature::MULTI_AGENT_UNLIMITED) {
+        return Ok(());
+    }
+    let limit = halo_common::license::FREE_AGENT_LIMIT as usize;
+    if active_count >= limit {
+        anyhow::bail!(
+            "free tier is limited to {limit} registered agents (you have {active_count}). \
+             Revoke one with `halo agent revoke <name>`, or set `license_key` in \
+             ~/.halo/config.yaml to lift the cap (`multi_agent_unlimited`)."
+        );
+    }
+    Ok(())
+}
+
 fn agent_cmd(paths: Paths, action: AgentCmd) -> Result<()> {
-    let listen = config::Config::load(&paths.config())
-        .map(|c| c.listen)
-        .unwrap_or_else(|_| "127.0.0.1:8787".to_string());
+    let cfg = config::Config::load(&paths.config()).unwrap_or_default();
+    let listen = cfg.listen.clone();
     let ks = keys::KeyStore::new(paths);
     match action {
         AgentCmd::Add {
@@ -314,6 +370,8 @@ fn agent_cmd(paths: Paths, action: AgentCmd) -> Result<()> {
             key,
             base_url,
         } => {
+            let active_count = ks.records()?.iter().filter(|r| r.is_active()).count();
+            check_agent_cap(active_count, &cfg.entitlements())?;
             let secret = match key {
                 Some(k) => k,
                 None => read_secret()?,
@@ -553,6 +611,8 @@ async fn serve(paths: Paths) -> Result<()> {
         ));
     }
 
+    let dashboard_cfg = cfg.dashboard.clone();
+
     let state = state::AppState {
         cfg: Arc::new(cfg),
         entitlements: Arc::new(entitlements),
@@ -570,6 +630,39 @@ async fn serve(paths: Paths) -> Result<()> {
         http,
         remote_revocations,
     };
+
+    // Local admin dashboard: free tier, loopback-only, on by default. A
+    // separate axum server/port from the LLM ingress on purpose (see
+    // dashboard.rs). Never fails startup of the main proxy if the dashboard
+    // port is unavailable -- it's a convenience surface, not core function.
+    if dashboard_cfg.enabled {
+        match dashboard::load_or_create_token(&paths) {
+            Ok(token) => {
+                let dstate = Arc::new(dashboard::DashboardState {
+                    app: state.clone(),
+                    paths: paths.clone(),
+                    token,
+                });
+                let dlisten = dashboard_cfg.listen.clone();
+                tracing::info!(
+                    listen = %dlisten,
+                    "dashboard listening (run `halo dashboard token` for the token needed to change settings)"
+                );
+                println!("Dashboard:            http://{dlisten}");
+                tokio::spawn(async move {
+                    match tokio::net::TcpListener::bind(&dlisten).await {
+                        Ok(listener) => {
+                            if let Err(e) = axum::serve(listener, dashboard::router(dstate)).await {
+                                tracing::error!("dashboard server error: {e}");
+                            }
+                        }
+                        Err(e) => tracing::error!("dashboard: failed to bind {dlisten}: {e}"),
+                    }
+                });
+            }
+            Err(e) => tracing::warn!("dashboard: failed to load/create local token, disabled: {e}"),
+        }
+    }
 
     // Background telemetry flush loop.
     {
@@ -601,4 +694,45 @@ async fn shutdown(telem: telemetry::Telemetry) {
     let _ = tokio::signal::ctrl_c().await;
     tracing::info!("shutting down; flushing telemetry");
     telem.flush().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn free_tier_allows_up_to_the_limit() {
+        let free = halo_common::Entitlements::default();
+        for n in 0..halo_common::license::FREE_AGENT_LIMIT as usize {
+            assert!(check_agent_cap(n, &free).is_ok(), "expected {n} to be under the cap");
+        }
+    }
+
+    #[test]
+    fn free_tier_blocks_at_the_limit() {
+        let free = halo_common::Entitlements::default();
+        let limit = halo_common::license::FREE_AGENT_LIMIT as usize;
+        assert!(check_agent_cap(limit, &free).is_err());
+        assert!(check_agent_cap(limit + 5, &free).is_err());
+    }
+
+    #[test]
+    fn licensed_multi_agent_unlimited_lifts_the_cap() {
+        let now = chrono::Utc::now();
+        let claims = halo_common::LicenseClaims {
+            org: "acme".into(),
+            tier: "pro".into(),
+            seats: 1,
+            features: vec![halo_common::license::feature::MULTI_AGENT_UNLIMITED.to_string()],
+            issued_at: now.to_rfc3339(),
+            expires_at: (now + chrono::Duration::days(30)).to_rfc3339(),
+        };
+        // Throwaway seed/keypair -- not Aperion's real signing key.
+        let seed = [7u8; 32];
+        let key = halo_common::license::issue_from_seed(&claims, &seed);
+        let pubkey = halo_common::license::pubkey_b64url_from_seed(&seed);
+        let vk = halo_common::license::pubkey_from_b64url(&pubkey).expect("valid pubkey");
+        let ent = halo_common::Entitlements::verify_with_key(&key, &vk, now);
+        assert!(check_agent_cap(1_000, &ent).is_ok());
+    }
 }

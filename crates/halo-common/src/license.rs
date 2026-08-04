@@ -32,6 +32,15 @@ use sha2::{Digest, Sha256};
 /// working set.
 pub const FREE_SEMANTIC_CACHE_MAX_ENTRIES: u64 = 200;
 
+/// Free-tier ceiling on the number of *active* registered agents (`halo agent
+/// add`) on a single install. Deliberately a scale/convenience cap, not a
+/// safety one: budgets, the kill switch, caching, and compression are never
+/// capped, and 3 is enough to fully evaluate Halo (e.g. one agent per
+/// provider plus a fast/cheap one). This is the main non-fleet reason to
+/// license Halo -- a solo power user who outgrows 3 agents on one machine
+/// hits it long before ever needing remote-kill or multi-seat.
+pub const FREE_AGENT_LIMIT: u32 = 3;
+
 /// Aperion's production license-signing public key (Ed25519, base64url, no pad).
 /// The matching private key is held by Aperion offline and never ships in any
 /// binary. Override at verify time (e.g. staging keys) with the
@@ -52,6 +61,10 @@ pub mod feature {
     pub const SUBJECT_ATTRIBUTION: &str = "subject_attribution";
     /// Multi-seat / multi-token relay dashboard.
     pub const MULTI_SEAT: &str = "multi_seat";
+    /// Raises (removes) the free-tier ceiling on registered agent count
+    /// (`halo agent add`). The one non-fleet paid feature -- useful to a
+    /// solo self-hoster scaling up on a single machine, not just a team.
+    pub const MULTI_AGENT_UNLIMITED: &str = "multi_agent_unlimited";
 
     /// All known features (for `halo license show` and issuer validation help).
     pub const ALL: &[&str] = &[
@@ -60,6 +73,7 @@ pub mod feature {
         SEMANTIC_CACHE_UNLIMITED,
         SUBJECT_ATTRIBUTION,
         MULTI_SEAT,
+        MULTI_AGENT_UNLIMITED,
     ];
 }
 
@@ -225,6 +239,14 @@ impl Entitlements {
 /// CLI mint a license without depending on `ed25519-dalek` directly.
 pub fn issue_from_seed(claims: &LicenseClaims, seed: &[u8; 32]) -> String {
     issue(claims, &SigningKey::from_bytes(seed))
+}
+
+/// Companion to [`issue_from_seed`]: the base64url public key matching a
+/// seed, so a caller (tests, or `HALO_LICENSE_PUBKEY` for a staging key) can
+/// verify a seed-issued license without depending on `ed25519-dalek` either.
+pub fn pubkey_b64url_from_seed(seed: &[u8; 32]) -> String {
+    let vk = SigningKey::from_bytes(seed).verifying_key();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(vk.to_bytes())
 }
 
 /// Issuer side (Aperion): sign `claims` into a paste-friendly license key. The

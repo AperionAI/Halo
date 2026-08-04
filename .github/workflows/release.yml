@@ -177,7 +177,7 @@ jobs:
           if ! gh release create "$TAG" ./* \
                 --repo "${DIST_REPO}" \
                 --title "$TAG" \
-                --notes "Prebuilt Halo binaries for $TAG. Source is closed; see https://get.halo.aperion.ai to install."; then
+                --notes "Prebuilt Halo binaries for $TAG. Source is closed; see https://halo-get.aperion.ai to install."; then
             gh release upload "$TAG" ./* \
               --repo "${DIST_REPO}" --clobber
           fi

@@ -26,7 +26,7 @@ docker compose up -d halo               # add the relay with: docker compose up 
 ## 2. One-line binary install (macOS / Linux, arm64 + x64)
 
 ```bash
-curl -fsSL https://get.halo.aperion.ai | sh
+curl -fsSL https://halo-get.aperion.ai | sh
 ```
 
 Downloads the matching prebuilt tarball, verifies its SHA-256, and drops `halo`
@@ -34,7 +34,7 @@ Downloads the matching prebuilt tarball, verifies its SHA-256, and drops `halo`
 
 ```bash
 HALO_VERSION=halo-v1.2.0 HALO_INSTALL_DIR=~/.local/bin \
-  curl -fsSL https://get.halo.aperion.ai | sh
+  curl -fsSL https://halo-get.aperion.ai | sh
 ```
 
 Windows: grab the `.zip` from the [releases page](https://github.com/AperionAI/halo-dist/releases).
@@ -108,7 +108,7 @@ To make the public channels resolve:
      dist repo.
    The release workflow's `mirror` job then copies each tag's tarballs into the
    dist repo automatically. (Until these are set, the job is skipped.)
-3. **`get.halo.aperion.ai`.** This host only needs to serve the single
+3. **`halo-get.aperion.ai`.** This host only needs to serve the single
    `install.sh` file (the script pulls the actual binaries from the dist repo's
    Releases, which are CDN-backed by GitHub). So any always-on, TLS-terminated
    box works — the build or deploy server is fine; load is one small static

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Smartflow Halo installer.
 #
-#   curl -fsSL https://get.halo.aperion.ai | sh
+#   curl -fsSL https://halo-get.aperion.ai | sh
 #
 # Detects OS/arch, downloads the matching release tarball from GitHub, verifies
 # its SHA-256, and drops the `halo` (and `halo-relay`) binaries into an install

@@ -50,7 +50,7 @@ OpenClaw `docker-compose` recipe).
 
 ```bash
 # One-liner (macOS/Linux, arm64/x64): downloads the right release binary.
-curl -fsSL https://get.halo.aperion.ai | sh
+curl -fsSL https://halo-get.aperion.ai | sh
 
 # Or Docker — public GHCR image, ships both `halo` and `halo-relay`:
 docker run --rm -v halo-data:/data -p 8787:8787 ghcr.io/aperionai/halo
@@ -96,6 +96,32 @@ not buffered — see `docs/DESIGN_REVIEW.md` for why that matters.
 halo status      # live spend by agent, current caps
 halo report      # local COGS/savings view — works fully offline
 ```
+
+### Local dashboard (free, on by default)
+
+`halo serve` also brings up a second, loopback-only web UI at
+`http://127.0.0.1:8788` — no relay, no account, nothing leaves the machine.
+It's a convenience layer over the same free-tier data `halo status`/`halo
+report` already show, plus the ability to revoke an agent or edit
+`config.yaml` from a browser instead of the CLI:
+
+- **Overview** — spend, savings, requests, cache-hit rate, by-model breakdown.
+- **Agents** — list + one-click revoke (same effect as `halo kill`).
+- **Settings** — budgets, cache toggles, semantic-cache threshold, relay URL.
+  Writes go straight to `~/.halo/config.yaml`; like most of Halo's config,
+  they take effect on the next `halo serve` restart, not live.
+
+Reads need nothing beyond loopback access, matching every other free-tier
+surface. Anything that *writes* (revoke, save settings) requires a local
+bearer token that never leaves the machine:
+
+```bash
+halo dashboard token              # print it (generates one on first use)
+halo dashboard token --regenerate # invalidate the old one, mint a new one
+```
+
+Disable it entirely with `dashboard.enabled: false` in `config.yaml`, or move
+it off the default port with `dashboard.listen`.
 
 ### Budgets & kill switch
 
@@ -223,26 +249,34 @@ relay's hosted per-subject drill-down is a paid feature (see below).
 
 ## Tiers & licensing
 
-Halo follows an OSS-core model. **The free tier is the whole local proxy, and
-it is unconditionally functional forever** — budgets + kill switch, exact-match
-cache, compression, prompt-cache injection, MCP cloak/taint, local audit log,
-and `halo report`. Nothing that keeps a self-hoster safe from a runaway bill is
-ever paywalled.
+Halo follows an OSS-core model. **The free tier's safety net is unconditional
+forever** — budgets + kill switch, exact-match cache, compression, prompt-cache
+injection, MCP cloak/taint, local audit log, and `halo report` are all fully
+functional, uncapped, and never gated. Nothing that keeps a self-hoster safe
+from a runaway bill is ever paywalled.
 
-A **paid license** (an offline, Ed25519-signed key — no phone-home, verified
-against a public key baked into the binary) unlocks hosted/multi-seat
-conveniences:
+Two things scale with a **paid license** (an offline, Ed25519-signed key — no
+phone-home, verified against a public key baked into the binary): how big
+Halo can get on *this one machine*, and hosted/multi-seat conveniences once
+you're running more than one:
 
 | Feature | Free | Paid |
 |---|---|---|
 | Local budgets, hard-cap kill switch, `halo kill` | ✅ | ✅ |
 | Exact-match cache, compression, prompt-cache injection | ✅ | ✅ |
 | MCP cloak/taint, local audit log, `halo report` | ✅ | ✅ |
+| Registered agents (`halo agent add`) | 3 | ✅ unlimited |
 | Semantic cache | ✅ (capped entries) | ✅ (raised cap) |
 | Budget alerting webhooks | — | ✅ |
 | Best-effort remote kill (pull from relay) | — | ✅ |
 | Relay multi-seat tokens | — | ✅ |
 | Hosted per-subject cost drill-down | — | ✅ |
+
+The 3-agent cap is the one non-fleet reason to upgrade — a solo power user
+running a researcher, a coder, and a reviewer agent off one Halo install hits
+it well before ever caring about remote-kill or multi-seat. Hitting it doesn't
+break anything already running: `halo agent add` just refuses to mint a
+*4th* virtual key until you revoke one or license up.
 
 ```bash
 halo license show          # current tier, features, expiry

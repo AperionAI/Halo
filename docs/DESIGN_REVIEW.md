@@ -309,6 +309,15 @@ older binary doesn't know is ignored, not a parse error. Issuing is offline
 (`halo license issue --signing-key ...`), key held by Aperion out of band.
 
 **Gating (Path A, self-hosted).** `Entitlements::has()` is the single gate:
+- registered agents (`halo agent add`) capped to `FREE_AGENT_LIMIT` (3)
+  unless `multi_agent_unlimited` — enforced in `agent_cmd`'s pure,
+  unit-tested `check_agent_cap` helper by counting active `VirtualKeyRecord`s
+  before minting a new one. This is the one non-fleet cap: unlike
+  alerting/remote-kill/multi-seat/subject-attribution, it bites a solo
+  self-hoster running several agents on one machine, not just a team.
+  Nothing already running is disrupted when the cap is hit — it only refuses
+  to mint a new virtual key; existing agents keep working, and revoking one
+  frees a slot without a license.
 - semantic-cache `max_entries` capped to `FREE_SEMANTIC_CACHE_MAX_ENTRIES`
   (200) unless `semantic_cache_unlimited` — the cache still works free, just
   smaller.
@@ -342,3 +351,39 @@ metering; materially a new product surface, to be planned once Phase 0-3 usage
 data exists) and Windows keychain verification on a real Windows host/CI
 runner (the `keyring` Credential Manager backend can behave differently in a
 headless/service context and can't be validated from this Mac).
+
+## Local admin dashboard (`halo-shim/src/dashboard.rs`)
+
+A second, loopback-only axum server (default `127.0.0.1:8788`, separate port
+from the LLM ingress) bundled into the `halo` binary itself, distinct from
+`halo-relay`'s hosted, multi-device dashboard. Free tier, on by default —
+consistent with every other local-only surface (budgets, cache, `halo
+report`) requiring no license.
+
+**Threat model / auth split.** Read endpoints (`/api/summary`, `/api/agents`,
+`/api/config`, `/api/entitlements`) require nothing beyond loopback network
+access, matching the CLI equivalents (`halo status`/`halo report`) that
+already require no auth. Endpoints that *mutate* state (`POST
+/api/agents/:name/revoke`, `POST /api/config`) require a `Bearer` token from
+`halo dashboard token` — 32 random bytes, generated on first use, written
+`0600` under `~/.halo/dashboard-token`, never transmitted anywhere but this
+loopback surface. This is the same "token gates writes, not reads" split
+already used by the relay's remote-kill panel, not a new auth model.
+
+**Config writes are not hot-reloaded.** `POST /api/config` re-reads
+`config.yaml` from disk (not the in-memory `Arc<Config>` captured at `serve`
+startup, so it can't clobber a concurrent manual edit), applies the patch,
+and writes it back. Most fields (cache size, MCP servers, the listen address
+itself) are consumed once at startup into long-lived structures (`redb`
+handles, `McpManager`, the bound `TcpListener`) — a real hot-reload would need
+each of those to become swappable, and a *partial* hot-reload (some fields
+live, others needing a restart) is worse than an honest "saved, restart to
+apply" message. `GET /api/config` also re-reads from disk rather than the
+in-memory copy, so a just-saved value shows up immediately even before that
+restart — the UI would otherwise look like the save silently failed.
+
+**Never blocks the main proxy.** If the dashboard's token file can't be
+created or its port can't be bound, that failure is logged and swallowed;
+`halo serve`'s core ingress still starts. The dashboard is a convenience
+surface layered on top of data the free tier already collects, not a
+dependency of it.
