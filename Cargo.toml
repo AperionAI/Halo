@@ -10,7 +10,7 @@ resolver = "2"
 members = ["crates/halo-common", "crates/halo-shim", "crates/halo-relay"]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license-file = "LICENSE"
 authors = ["Aperion <support@aperion.ai>"]
