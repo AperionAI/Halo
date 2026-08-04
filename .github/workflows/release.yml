@@ -51,8 +51,13 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             linker: gcc-aarch64-linux-gnu
+          # Both Mac targets build on the same arm64 (Apple Silicon) runner --
+          # Xcode's cc/ld64 cross-compiles x86_64-apple-darwin natively, no
+          # Rosetta or extra linker needed. macos-13 (Intel) hosted runners
+          # have been hitting multi-hour/indefinite queue times; macos-14
+          # queues in ~seconds.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-14
           - target: aarch64-apple-darwin
             os: macos-14
           - target: x86_64-pc-windows-msvc
