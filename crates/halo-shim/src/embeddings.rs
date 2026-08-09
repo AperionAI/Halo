@@ -10,6 +10,7 @@
 //!     embeddings endpoint -- Halo doesn't start Ollama, just talks to it.
 //!   * `Mock` is deterministic (hash-based) and free, for tests/offline dev.
 
+use crate::config::EgressConfig;
 use anyhow::{anyhow, Context, Result};
 use halo_common::pricing::{estimate_cost_usd, PriceTable};
 use serde::{Deserialize, Serialize};
@@ -50,17 +51,32 @@ pub struct EmbeddingClient {
     /// override the OpenAI base for an OpenAI-compatible embeddings endpoint.
     pub base_url: Option<String>,
     http: reqwest::Client,
+    /// Checked before every embeddings HTTP call, same policy as the LLM
+    /// provider and relay egress. Defaults to unrestricted.
+    egress: EgressConfig,
 }
 
 const RESERVED_KEY_ID: &str = "__embeddings__";
 
 impl EmbeddingClient {
+    #[allow(dead_code)] // convenience wrapper used by tests; production always calls with_egress
     pub fn new(kind: EmbeddingProviderKind, model: String, base_url: Option<String>, http: reqwest::Client) -> Self {
+        Self::with_egress(kind, model, base_url, http, EgressConfig::default())
+    }
+
+    pub fn with_egress(
+        kind: EmbeddingProviderKind,
+        model: String,
+        base_url: Option<String>,
+        http: reqwest::Client,
+        egress: EgressConfig,
+    ) -> Self {
         Self {
             kind,
             model,
             base_url,
             http,
+            egress,
         }
     }
 
@@ -89,6 +105,8 @@ impl EmbeddingClient {
         })?;
         let base = self.base_url.as_deref().unwrap_or("https://api.openai.com");
         let url = format!("{}/v1/embeddings", base.trim_end_matches('/'));
+        crate::egress::check_egress(&self.egress, &url)
+            .map_err(|host| anyhow!("Halo egress policy denied embeddings call to \"{host}\""))?;
         let resp = self
             .http
             .post(&url)
@@ -128,6 +146,8 @@ impl EmbeddingClient {
             .as_deref()
             .unwrap_or("http://localhost:11434");
         let url = format!("{}/api/embeddings", base.trim_end_matches('/'));
+        crate::egress::check_egress(&self.egress, &url)
+            .map_err(|host| anyhow!("Halo egress policy denied embeddings call to \"{host}\""))?;
         let resp = self
             .http
             .post(&url)

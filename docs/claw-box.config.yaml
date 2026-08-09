@@ -1,0 +1,71 @@
+# Halo config for a single-operator "claw box" (OpenClaw or similar
+# self-hosted agent runtime) running off one Anthropic API key.
+#
+# Copy to ~/.halo/config.yaml on the claw box, then follow
+# docs/CLAW_BOX_SETUP.md. Every field here is optional -- this is a
+# reasonable starting point, not a requirement.
+
+listen: "127.0.0.1:8787"
+
+# Local dashboard: view spend/savings, see registered agents, edit this
+# config, revoke an agent -- all from a browser, no relay needed.
+# Open http://127.0.0.1:8788 once `halo serve` is running.
+dashboard:
+  enabled: true
+  listen: "127.0.0.1:8788"
+
+# Not using the hosted relay for this box -- everything below works fully
+# offline. Uncomment only if/when you want a shared dashboard across
+# multiple boxes:
+# relay_url: "https://halo-relay.example.com"
+# relay_token: "paste-the-device-token-issued-at-registration"
+
+# No license key -- this is the free tier. Fully functional (budgets, kill
+# switch, exact-match cache, compression, MCP cloak/taint, audit log,
+# `halo report`, this dashboard) with one cap: up to 3 registered agents.
+# One Claw box, one Anthropic key -- you'll only ever register 1, so this
+# doesn't matter unless you spin up several agents on this same box later.
+# license_key: "eyJ...paste-the-token..."
+
+budget:
+  # Rolling 24h window. Tune these to whatever you're comfortable Claw could
+  # spend unattended before it's hard-stopped.
+  window_hours: 24
+  soft_cap_usd: 25.0    # Halo keeps serving, but flags this in `halo report`.
+  hard_cap_usd: 50.0    # Halo starts refusing requests for this agent -- the
+                        # kill switch. Raise/lower to match your risk comfort.
+  per_agent: []         # Add an override here only if you register a 2nd agent later.
+
+cache:
+  enabled: true
+  max_entries: 10000
+
+# Off by default: it costs a (tiny) real embeddings-API call per lookup/store,
+# and needs a second provider key. Anthropic-only box -- leave this off
+# unless you also get an OpenAI key just for embeddings, or run a local
+# Ollama embedding model (provider: "ollama", free, no second key).
+semantic_cache:
+  enabled: false
+  provider: "openai"
+  model: "text-embedding-3-small"
+  similarity_threshold: 0.93
+  # Free tier caps this at 200; keep the sample at/under the cap so a fresh
+  # install never logs a "capped to the free-tier ceiling" warning on start.
+  # A paid license with `semantic_cache_unlimited` lifts the cap -- raise this
+  # then if you turn the semantic cache on.
+  max_entries: 200
+
+compression:
+  verbose_phrases: true
+  whitespace: true
+  aggressive_abbreviations: false
+  # Anthropic-only box: definitely keep this on. It injects cache_control
+  # breakpoints on the system prompt / tools / large attachments so Claude
+  # discounts repeated context instead of re-billing it every turn.
+  anthropic_cache_control: true
+
+# No MCP servers fronted yet. If Claw calls out to MCP servers (e.g.
+# filesystem, a database, search), list them here and point Claw's MCP
+# config at Halo instead of the servers directly -- Halo applies secret
+# cloaking at the seam so the real credentials never reach Claw's context.
+mcp_servers: []

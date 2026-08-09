@@ -51,6 +51,9 @@ pub enum PolicyDecision {
     SoftCapWarn,
     /// Blocked by a tool/domain policy at the MCP seam.
     PolicyBlocked,
+    /// Refused before ever leaving the process: the destination host isn't on
+    /// the configured `egress.allowed_upstreams` list.
+    EgressDenied,
 }
 
 impl PolicyDecision {
@@ -62,6 +65,7 @@ impl PolicyDecision {
             PolicyDecision::BudgetBlocked => "budget_blocked",
             PolicyDecision::SoftCapWarn => "soft_cap_warn",
             PolicyDecision::PolicyBlocked => "policy_blocked",
+            PolicyDecision::EgressDenied => "egress_denied",
         }
     }
 }

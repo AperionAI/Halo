@@ -25,7 +25,10 @@ model. Same posture as `shield-standalone` and `compass-standalone`.
 
 - **Provider API keys never leave your machine.** They live in your OS keychain
   (macOS Keychain / Linux kernel keyutils / Windows Credential Manager), or in
-  an Argon2id + XChaCha20-Poly1305 encrypted file on headless boxes.
+  an Argon2id + XChaCha20-Poly1305 encrypted file on headless boxes. The OS
+  keychain is unreachable without a GUI login session (e.g. over SSH/sudo on an
+  always-on agent box) -- see [`docs/HEADLESS.md`](docs/HEADLESS.md) for the
+  encrypted-file vault path, which is the normal setup for a self-hosted box.
 - **The relay receives metadata only** — token counts, model, cost, cache-hit
   flag. Never prompts, responses, tool arguments, or vectors. Model traffic
   never transits the relay. The full schema is published in
@@ -48,9 +51,17 @@ The source repo is closed, but the artifacts are public — no GitHub auth
 needed. See [`docs/INSTALL.md`](docs/INSTALL.md) for all channels (incl. an
 OpenClaw `docker-compose` recipe).
 
+On a multi-user or agent box where the proxy runs as a service user, install to
+a shared location so that user can reach it: `HALO_INSTALL_DIR=/usr/local/bin`
+(otherwise the one-liner falls back to your personal `~/.local/bin`, which the
+service user can't see).
+
 ```bash
 # One-liner (macOS/Linux, arm64/x64): downloads the right release binary.
 curl -fsSL https://halo-get.aperion.ai | sh
+
+# Shared install for a service-user box:
+HALO_INSTALL_DIR=/usr/local/bin sudo -E sh -c 'curl -fsSL https://halo-get.aperion.ai | sh'
 
 # Or Docker — public GHCR image, ships both `halo` and `halo-relay`:
 docker run --rm -v halo-data:/data -p 8787:8787 ghcr.io/aperionai/halo
@@ -65,8 +76,10 @@ Windows: grab the `.zip` from the [releases page](https://github.com/AperionAI/h
 ## Quick start
 
 ```bash
-# 1. Register an agent. Mints a virtual key; stores the real key in your keychain.
-halo agent add researcher --provider openai --key sk-...
+# 1. Register an agent. Mints a virtual key; stores the real key in your
+#    keychain. Pass the real key on stdin so it never lands in shell history
+#    (there's also a `--key sk-...` flag, but avoid it interactively):
+halo agent add researcher --provider openai      # paste the key at the prompt
 
 # 2. Point your runtime at Halo instead of the provider:
 export OPENAI_API_KEY=sf_live_researcher_...        # the virtual key printed above
@@ -76,8 +89,16 @@ export OPENAI_BASE_URL=http://127.0.0.1:8787/v1
 halo serve
 ```
 
+On a headless / SSH-only box the OS keychain isn't reachable; Halo uses an
+encrypted-file vault instead -- see [`docs/HEADLESS.md`](docs/HEADLESS.md). For
+an always-on box, install it as a service (`sudo halo service install`) rather
+than leaving `halo serve` in a terminal.
+
 Anthropic works the same way (`--provider anthropic`, then set
 `ANTHROPIC_API_KEY` to the virtual key and `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`).
+
+Running the OpenClaw Gateway? See [`docs/OPENCLAW_INTEGRATION.md`](docs/OPENCLAW_INTEGRATION.md)
+for exactly where it reads those env vars from and the upgrade gotcha to watch.
 
 Any OpenAI-compatible third party (Groq, Together, Fireworks, a local
 vLLM/Ollama server) works too — add `--base-url` to `agent add`:
@@ -107,6 +128,8 @@ report` already show, plus the ability to revoke an agent or edit
 
 - **Overview** — spend, savings, requests, cache-hit rate, by-model breakdown.
 - **Agents** — list + one-click revoke (same effect as `halo kill`).
+- **AI usage registry** — every agent/provider/endpoint plus lifetime spend
+  and savings, downloadable as JSON or CSV (see "AI usage registry" below).
 - **Settings** — budgets, cache toggles, semantic-cache threshold, relay URL.
   Writes go straight to `~/.halo/config.yaml`; like most of Halo's config,
   they take effect on the next `halo serve` restart, not live.
@@ -247,6 +270,72 @@ outbound call (`<channel>:<thread-or-user-id>`). Halo records it as metadata
 (never content) and rolls up spend/savings "by subject" in `halo report`. The
 relay's hosted per-subject drill-down is a paid feature (see below).
 
+### Egress allowlist / region-lock (off by default)
+
+Every egress Halo itself initiates — the LLM provider, the embeddings API,
+and the relay telemetry upload — can be constrained to a fixed set of hosts.
+This is a hard, proxy-side control, not a log line: a request to a host not
+on the list is denied *before it leaves the process*, with an audit event and
+a clear error back to the agent. Even a fully automated, or prompt-injected,
+agent cannot make Halo reach an endpoint you haven't approved.
+
+```yaml
+egress:
+  allowed_upstreams:
+    - "api.anthropic.com"
+    - ".yourcompany.com"   # leading "." matches any subdomain (and the apex)
+```
+
+Empty/absent (the default) is unrestricted — nothing changes for an existing
+install until you opt in. See `docs/DESIGN_REVIEW.md` for the fail-closed
+semantics and why the embeddings path in particular fails closed (it's the
+one place raw prompt text would otherwise reach a third party).
+
+### At-rest encryption for cached content (off by default)
+
+The two stores that hold response content on disk — `cache.redb` (exact-match
+bodies) and `semantic_cache.redb` (semantic-cache answer text) — can be
+encrypted at rest with the same Argon2id + XChaCha20-Poly1305 primitive Halo
+already uses for the credential fallback:
+
+```bash
+export HALO_VAULT_PASSPHRASE="correct horse battery staple"
+```
+
+```yaml
+encrypt_at_rest: true
+```
+
+If `encrypt_at_rest` is `true` and the passphrase is unset, `halo serve`
+refuses to start rather than silently running in plaintext — the one config
+problem in Halo that blocks startup, because it's the one case where the
+operator explicitly asked for a guarantee. Embedding vectors, the semantic
+cache's partition key, and every metadata store (ledger/audit/telemetry) stay
+cleartext by design — none of them are reversible to the original prompt or
+response text. A row written before encryption was enabled is still readable
+after turning it on (and gets sealed the next time it's written); a hard
+guarantee of "no plaintext content on disk, ever" requires starting with
+encryption on or wiping `~/.halo/cache.redb` / `semantic_cache.redb` first.
+
+### AI usage registry — governance/audit export
+
+A metadata-only export of what's running: every agent, its provider and
+endpoint, status, and lifetime request/spend/savings totals, plus the MCP
+servers Halo fronts (name + command only — `env`, which can hold secrets, is
+never included). This is the evidence pack a compliance reviewer or an AI
+system inventory mandate (e.g. Austin's Resolution 55) asks for, built purely
+from data Halo already tracks — no new instrumentation, no prompt/response
+content.
+
+```bash
+halo registry export                          # JSON to stdout
+halo registry export --format csv --out registry.csv
+```
+
+The same data is one click away in the local dashboard's **AI usage
+registry** panel (`/api/registry`, `/api/registry.csv`) — read-only, no
+token needed, works fully offline.
+
 ## Tiers & licensing
 
 Halo follows an OSS-core model. **The free tier's safety net is unconditional
@@ -265,6 +354,8 @@ you're running more than one:
 | Local budgets, hard-cap kill switch, `halo kill` | ✅ | ✅ |
 | Exact-match cache, compression, prompt-cache injection | ✅ | ✅ |
 | MCP cloak/taint, local audit log, `halo report` | ✅ | ✅ |
+| Egress allowlist / region-lock, at-rest encryption | ✅ | ✅ |
+| AI usage registry export (JSON/CSV, `halo registry`) | ✅ | ✅ |
 | Registered agents (`halo agent add`) | 3 | ✅ unlimited |
 | Semantic cache | ✅ (capped entries) | ✅ (raised cap) |
 | Budget alerting webhooks | — | ✅ |

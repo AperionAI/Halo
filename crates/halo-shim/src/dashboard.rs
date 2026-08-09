@@ -17,6 +17,7 @@
 //! hot-reload that silently misses some fields.
 
 use crate::config::{Config, Paths};
+use crate::registry;
 use crate::report;
 use crate::state::AppState;
 use axum::extract::{Path as AxPath, State};
@@ -68,6 +69,8 @@ pub fn router(state: Arc<DashboardState>) -> Router {
         .route("/api/agents/:name/revoke", post(revoke_agent))
         .route("/api/config", get(get_config).post(post_config))
         .route("/api/entitlements", get(entitlements))
+        .route("/api/registry", get(registry_json))
+        .route("/api/registry.csv", get(registry_csv))
         .with_state(state)
 }
 
@@ -316,6 +319,42 @@ async fn entitlements(State(st): State<Arc<DashboardState>>) -> impl IntoRespons
     }))
 }
 
+/// Build the AI usage / governance registry from live state -- same
+/// aggregation `halo registry export` uses, just fed from `AppState` instead
+/// of re-opening stores from disk. Unauthenticated read, same as the other
+/// read endpoints on loopback (see module docs).
+fn build_live_registry(st: &DashboardState) -> registry::RegistryReport {
+    let records = st.app.keys.records().unwrap_or_default();
+    let events = st.app.telem.local_events();
+    registry::build_registry(
+        &records,
+        &events,
+        &st.app.prices,
+        &st.app.cfg.mcp_servers,
+        &st.app.entitlements,
+        &st.app.device_id,
+    )
+}
+
+async fn registry_json(State(st): State<Arc<DashboardState>>) -> impl IntoResponse {
+    Json(build_live_registry(&st))
+}
+
+async fn registry_csv(State(st): State<Arc<DashboardState>>) -> impl IntoResponse {
+    let csv = registry::agents_to_csv(&build_live_registry(&st));
+    let filename = format!("halo-ai-registry-{}.csv", chrono::Utc::now().format("%Y-%m-%d"));
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "text/csv".to_string()),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        csv,
+    )
+}
+
 const HTML: &str = r#"<!doctype html>
 <html lang="en">
 <head>
@@ -385,6 +424,14 @@ const HTML: &str = r#"<!doctype html>
   <h2>By model</h2>
   <table><thead><tr><th>Model</th><th class="num">Requests</th><th class="num">Spend</th><th class="num">Saved</th></tr></thead><tbody id="models"></tbody></table>
 
+  <h2>AI usage registry</h2>
+  <div class="hint">A governance/audit export: every agent, its provider and endpoint, and its lifetime request/spend/savings totals. Metadata only -- no prompt/response content. Read-only, no token needed.</div>
+  <div class="row">
+    <button onclick="downloadRegistry('json')">Download JSON</button>
+    <button onclick="downloadRegistry('csv')">Download CSV</button>
+  </div>
+  <table><thead><tr><th>Agent</th><th>Provider</th><th>Endpoint</th><th>Status</th><th class="num">Requests</th><th class="num">Spend</th><th class="num">Saved</th></tr></thead><tbody id="registry"></tbody></table>
+
   <h2>Settings</h2>
   <div class="hint">Changes are written to <code>~/.halo/config.yaml</code> immediately but require restarting <code>halo serve</code> to take effect. Saving requires the local dashboard token.</div>
   <div class="form-grid" id="settingsForm">
@@ -443,6 +490,26 @@ async function loadEntitlements() {
   const e = await r.json();
   document.getElementById('tierChip').textContent = e.tier + ' · ' + e.status;
 }
+async function loadRegistry() {
+  const r = await fetch('/api/registry');
+  const reg = await r.json();
+  const tb = document.getElementById('registry'); tb.innerHTML = '';
+  if (!reg.agents || !reg.agents.length) { tb.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">No agents registered yet.</td></tr>'; return; }
+  reg.agents.forEach(a => {
+    tb.innerHTML += `<tr><td>${a.name}</td><td>${a.provider}</td><td>${a.base_url_host || '(default)'}</td><td>${a.status}</td><td class="num">${a.requests}</td><td class="num money">${usd(a.spend_usd)}</td><td class="num">${usd(a.savings_usd)}</td></tr>`;
+  });
+}
+function downloadRegistry(format) {
+  const url = format === 'csv' ? '/api/registry.csv' : '/api/registry';
+  if (format === 'csv') { window.location.href = url; return; }
+  fetch(url).then(r => r.json()).then(data => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'halo-ai-registry-' + new Date().toISOString().slice(0,10) + '.json';
+    a.click();
+  });
+}
 async function loadConfig() {
   const r = await fetch('/api/config');
   const c = await r.json();
@@ -476,7 +543,7 @@ async function saveConfig() {
     msg.textContent = r.ok ? 'Saved. Restart `halo serve` to apply.' : `Failed (${r.status}): check the token.`;
   } catch(e) { msg.textContent = 'Request failed: ' + e; }
 }
-load(); loadAgents(); loadEntitlements(); loadConfig();
+load(); loadAgents(); loadEntitlements(); loadConfig(); loadRegistry();
 </script>
 </body>
 </html>"#;

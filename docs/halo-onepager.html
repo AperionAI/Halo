@@ -230,7 +230,7 @@ table.market .no { color: #64748b; }
     <a href="aperion-shield.html">Aperion Shield</a>
     <a href="index.html#support">Support</a>
   </div>
-  <span class="g-badge">v1.2 — One-Pager</span>
+  <span class="g-badge">v1.3 — One-Pager</span>
 </nav>
 
 <div class="container">
@@ -251,7 +251,7 @@ table.market .no { color: #64748b; }
 
   <!-- ─────── HEADER ─────── -->
   <div class="header">
-    <div class="version-chip">Smartflow Halo · v1.2 · One-Pager</div>
+    <div class="version-chip">Smartflow Halo · v1.3 · One-Pager</div>
     <h1>Runtime governance for self-hosted<br>AI agents, in one binary.</h1>
     <p class="tagline">
       Halo sits between your agent runtime and the model providers (and your MCP servers). Budgets with a real kill switch, exact + cross-provider semantic caching, compression, MCP secret cloaking, and a local dashboard — no cloud, no account, and <strong>no model of any kind running inside the process</strong>. Free tier, forever.
@@ -431,6 +431,8 @@ halo serve</div>
         <li>Compression + Anthropic prompt-cache injection</li>
         <li>MCP cloak/taint, tamper-evident local audit log</li>
         <li><code>halo report</code> + the local dashboard, both fully offline</li>
+        <li>Egress allowlist / region-lock, at-rest encryption for cached content</li>
+        <li>AI usage / governance registry export (JSON/CSV, <code>halo registry</code>)</li>
         <li>Up to 3 registered agents (<code>halo agent add</code>)</li>
         <li>No account, no telemetry beyond opt-in metadata to your own relay</li>
       </ul>
@@ -459,6 +461,7 @@ halo serve</div>
       <tr><td class="row-label">MCP secret cloaking</td><td class="us">Built in (Shield-derived)</td><td class="no">Not built in</td><td class="no">Not built in</td><td class="no">None</td></tr>
       <tr><td class="row-label">Provider keys leave your machine</td><td class="us">Never</td><td class="no">Depends on deployment</td><td class="no">Traffic transits their cloud</td><td class="no">N/A</td></tr>
       <tr><td class="row-label">Runs a model to do its job</td><td class="us">Never — zero LLM deps</td><td class="no">No</td><td class="no">No</td><td class="no">N/A</td></tr>
+      <tr><td class="row-label">AI system registry / audit export</td><td class="us">Built in, free (JSON/CSV)</td><td class="no">Not built in</td><td class="no">Enterprise-tier add-on</td><td class="no">None</td></tr>
       <tr><td class="row-label">Free tier ceiling</td><td class="us">Safety net uncapped forever; 3 agents</td><td class="no">Open source but no managed budgets/cache</td><td class="no">Usage-metered from day one</td><td class="no">No governance at all</td></tr>
     </tbody>
   </table>
@@ -477,7 +480,7 @@ halo serve</div>
     <div class="feature-body">Rust 1.75+ stable. Own workspace, lean dependency tree, <code>redb</code>/SQLite single-file stores — no Redis, no Mongo, no Postgres.</div>
 <div class="code-block">cargo build --release
 ./target/release/halo --version
-cargo test --release    <span class="cm"># 65 tests, all green</span></div>
+cargo test --release    <span class="cm"># 119 tests, all green</span></div>
     <div class="feature-body">
       <strong>Public binaries:</strong> <a href="https://github.com/AperionAI/halo-dist/releases" style="color: #5eead4;">github.com/AperionAI/halo-dist/releases</a> &nbsp;·&nbsp;
       <strong>Container:</strong> <code>ghcr.io/aperionai/halo</code> &nbsp;·&nbsp;

@@ -10,17 +10,21 @@ mod cachekey;
 mod compress;
 mod config;
 mod dashboard;
+mod egress;
 mod embeddings;
 mod ingress;
 mod keys;
 mod mcp;
+mod registry;
 mod report;
 mod revocations;
 mod semantic_cache;
+mod service;
 mod state;
 mod streaming;
 mod telemetry;
 mod util;
+mod vault;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -76,6 +80,52 @@ enum Cmd {
         #[command(subcommand)]
         action: DashboardCmd,
     },
+    /// AI usage / governance registry: which agents exist, what they've
+    /// touched, and what they've cost -- metadata-only, no prompt/response
+    /// content. Works fully offline; no dashboard required.
+    Registry {
+        #[command(subcommand)]
+        action: RegistryCmd,
+    },
+    /// Install or remove Halo as an always-on background service so it
+    /// survives logout and reboot (macOS launchd; Linux systemd is a
+    /// documented template for now). Run with sudo.
+    Service {
+        #[command(subcommand)]
+        action: ServiceCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServiceCmd {
+    /// Generate the wrapper, passphrase file, log dir, and LaunchDaemon, then
+    /// load it. Run with sudo.
+    Install {
+        /// User the service runs as (e.g. the agent runtime's service user).
+        /// Defaults to $SUDO_USER, then root.
+        #[arg(long)]
+        user: Option<String>,
+    },
+    /// Unload and remove the service (leaves the data dir and passphrase in
+    /// place). Run with sudo.
+    Uninstall,
+}
+
+#[derive(Subcommand)]
+enum RegistryCmd {
+    /// Print the registry to stdout (or write it to `--out`).
+    Export {
+        #[arg(long, value_enum, default_value_t = RegistryFormat::Json)]
+        format: RegistryFormat,
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum RegistryFormat {
+    Json,
+    Csv,
 }
 
 #[derive(Subcommand)]
@@ -192,7 +242,51 @@ async fn main() -> Result<()> {
         Cmd::Embeddings { action } => embeddings_cmd(paths, action),
         Cmd::License { action } => license_cmd(paths, action),
         Cmd::Dashboard { action } => dashboard_cmd(paths, action),
+        Cmd::Registry { action } => registry_cmd(paths, action),
+        Cmd::Service { action } => service_cmd(action),
     }
+}
+
+fn service_cmd(action: ServiceCmd) -> Result<()> {
+    match action {
+        ServiceCmd::Install { user } => service::install(user),
+        ServiceCmd::Uninstall => service::uninstall(),
+    }
+}
+
+fn registry_cmd(paths: Paths, action: RegistryCmd) -> Result<()> {
+    match action {
+        RegistryCmd::Export { format, out } => {
+            let cfg = Config::load(&paths.config())?;
+            let ks = keys::KeyStore::new(paths.clone());
+            let device_id = ks.device_id()?;
+            let records = ks.records().unwrap_or_default();
+            let telem = telemetry::Telemetry::new(
+                device_id.clone(),
+                None,
+                None,
+                paths.spool_dir(),
+                paths.base.join("telemetry.jsonl"),
+            );
+            let events = telem.local_events();
+            let entitlements = cfg.entitlements();
+            let prices = cfg.price_table();
+            let report =
+                registry::build_registry(&records, &events, &prices, &cfg.mcp_servers, &entitlements, &device_id);
+            let rendered = match format {
+                RegistryFormat::Json => serde_json::to_string_pretty(&report)?,
+                RegistryFormat::Csv => registry::agents_to_csv(&report),
+            };
+            match out {
+                Some(path) => {
+                    std::fs::write(&path, rendered)?;
+                    eprintln!("wrote {}", path.display());
+                }
+                None => println!("{rendered}"),
+            }
+        }
+    }
+    Ok(())
 }
 
 fn dashboard_cmd(paths: Paths, action: DashboardCmd) -> Result<()> {
@@ -362,6 +456,7 @@ fn check_agent_cap(active_count: usize, entitlements: &halo_common::Entitlements
 fn agent_cmd(paths: Paths, action: AgentCmd) -> Result<()> {
     let cfg = config::Config::load(&paths.config()).unwrap_or_default();
     let listen = cfg.listen.clone();
+    let cred_fallback = paths.cred_fallback();
     let ks = keys::KeyStore::new(paths);
     match action {
         AgentCmd::Add {
@@ -376,7 +471,7 @@ fn agent_cmd(paths: Paths, action: AgentCmd) -> Result<()> {
                 Some(k) => k,
                 None => read_secret()?,
             };
-            let vkey = ks.issue(&name, provider.into(), secret.trim(), base_url.clone())?;
+            let (vkey, backend) = ks.issue(&name, provider.into(), secret.trim(), base_url.clone())?;
             println!("Registered agent '{name}'. Configure your runtime with:\n");
             match Provider::from(provider) {
                 Provider::Anthropic => {
@@ -394,7 +489,21 @@ fn agent_cmd(paths: Paths, action: AgentCmd) -> Result<()> {
                     }
                 }
             }
-            println!("\nThe real provider key is stored in your OS keychain, never on disk.");
+            match backend {
+                keys::SecretBackend::Keychain => {
+                    println!("\nThe real provider key is stored in your OS keychain, never on disk.");
+                }
+                keys::SecretBackend::EncryptedFile => {
+                    println!(
+                        "\nNo OS keychain was available (headless box / no GUI session), so the \
+                         real provider key was sealed with Argon2id + XChaCha20-Poly1305 in \
+                         {}, decryptable only with $HALO_VAULT_PASSPHRASE. It is never written \
+                         in plaintext. Keep that passphrase set on every `halo serve` start -- \
+                         see docs/HEADLESS.md.",
+                        cred_fallback.display()
+                    );
+                }
+            }
         }
         AgentCmd::List => {
             let recs = ks.records()?;
@@ -448,6 +557,7 @@ fn status(paths: Paths) -> Result<()> {
     let ledger = budget::Ledger::open(&paths.ledger(), cfg.budget.window_hours)?;
 
     println!("Smartflow Halo -- status");
+    println!("Data dir: {}", paths.base.display());
     println!("Listen:  {}", cfg.listen);
     println!(
         "Relay:   {}",
@@ -456,6 +566,18 @@ fn status(paths: Paths) -> Result<()> {
     println!(
         "Caps:    global soft {:?}  hard {:?}  window {}h",
         cfg.budget.soft_cap_usd, cfg.budget.hard_cap_usd, cfg.budget.window_hours
+    );
+    println!(
+        "Egress:  {}",
+        if cfg.egress.is_restricted() {
+            format!("restricted to {} host(s)", cfg.egress.allowed_upstreams.len())
+        } else {
+            "unrestricted (no egress.allowed_upstreams configured)".to_string()
+        }
+    );
+    println!(
+        "At rest: {}",
+        if cfg.encrypt_at_rest { "encrypted (cache + semantic cache)" } else { "plaintext (encrypt_at_rest: false)" }
     );
 
     let recs = ks.records()?;
@@ -483,16 +605,38 @@ fn status(paths: Paths) -> Result<()> {
 
 fn report_cmd(paths: Paths, hours: Option<i64>) -> Result<()> {
     let cfg = Config::load(&paths.config())?;
+    let log_path = paths.base.join("telemetry.jsonl");
+
+    // Print the directory being read up front. On a box where `halo serve`
+    // runs as a service user, running `halo report` as a different user reads
+    // that user's ~/.halo (a different, empty store) -- a confident "$0.0000"
+    // in that case has burned real debugging time, so surface the path (and,
+    // if there's nothing here, say so explicitly rather than showing zeros).
+    println!("Data dir: {}", paths.base.display());
+    if !log_path.exists() {
+        println!(
+            "\nNo telemetry log (telemetry.jsonl) exists in this directory yet -- Halo has \
+             not recorded any requests here.\nIf you expected data, check that you're running \
+             as the same user (and $HOME / $HALO_HOME) as `halo serve`.\n"
+        );
+    }
+
     let telem = telemetry::Telemetry::new(
         String::new(),
         None,
         None,
         paths.spool_dir(),
-        paths.base.join("telemetry.jsonl"),
+        log_path.clone(),
     );
     let events = telem.local_events();
     let since = hours.map(|h| chrono::Utc::now().timestamp() - h * 3600);
     let r = report::build(&events, since, &cfg.price_table());
+    if log_path.exists() && r.total.requests == 0 {
+        println!(
+            "\nThe telemetry log here has no requests in the selected window. If you expected \
+             data, confirm `halo serve` writes to this same directory (same user / $HALO_HOME).\n"
+        );
+    }
     print!("{}", report::render(&r));
     Ok(())
 }
@@ -525,13 +669,41 @@ async fn serve(paths: Paths) -> Result<()> {
         }
     }
 
-    let cache = cache::CacheStore::open(&paths.cache(), cfg.cache.max_entries, cfg.cache.enabled)?;
+    // Encryption-at-rest is opt-in but, once requested, non-negotiable: a
+    // missing passphrase is the one config problem that blocks startup,
+    // because silently falling back to plaintext would violate exactly what
+    // the operator asked for.
+    let vault_passphrase = if cfg.encrypt_at_rest {
+        let pass = std::env::var("HALO_VAULT_PASSPHRASE").ok().filter(|s| !s.is_empty());
+        if pass.is_none() {
+            anyhow::bail!(
+                "encrypt_at_rest is true in config.yaml but $HALO_VAULT_PASSPHRASE is unset. \
+                 Set it before starting `halo serve`, or set encrypt_at_rest: false."
+            );
+        }
+        pass
+    } else {
+        None
+    };
+    if vault_passphrase.is_some() {
+        tracing::info!("encrypt_at_rest is on: cache.redb and semantic_cache.redb content is sealed");
+    }
+
+    let cache = cache::CacheStore::open_with_encryption(
+        &paths.cache(),
+        cfg.cache.max_entries,
+        cfg.cache.enabled,
+        vault_passphrase.clone(),
+    )?;
     // Free tier caps the semantic-cache working set; a license lifts it.
     let semantic_max = if entitlements.has(halo_common::license::feature::SEMANTIC_CACHE_UNLIMITED) {
         cfg.semantic_cache.max_entries
     } else {
         let ceiling = halo_common::license::FREE_SEMANTIC_CACHE_MAX_ENTRIES;
-        if cfg.semantic_cache.max_entries > ceiling {
+        // Only warn when the semantic cache is actually enabled -- an unused,
+        // disabled feature carrying a too-high `max_entries` shouldn't spam a
+        // warning on every start (the cap is applied either way, silently).
+        if cfg.semantic_cache.enabled && cfg.semantic_cache.max_entries > ceiling {
             tracing::info!(
                 configured = cfg.semantic_cache.max_entries,
                 ceiling,
@@ -541,7 +713,11 @@ async fn serve(paths: Paths) -> Result<()> {
         }
         cfg.semantic_cache.max_entries.min(ceiling)
     };
-    let semantic = semantic_cache::SemanticCacheStore::open(&paths.semantic_cache(), semantic_max)?;
+    let semantic = semantic_cache::SemanticCacheStore::open_with_encryption(
+        &paths.semantic_cache(),
+        semantic_max,
+        vault_passphrase.clone(),
+    )?;
     if cfg.semantic_cache.enabled {
         tracing::info!(
             provider = %cfg.semantic_cache.provider,
@@ -555,12 +731,13 @@ async fn serve(paths: Paths) -> Result<()> {
         &paths.audit(),
         &paths.audit_key(),
     )?));
-    let telem = telemetry::Telemetry::new(
+    let telem = telemetry::Telemetry::with_egress(
         device_id.clone(),
         cfg.relay_url.clone(),
         cfg.relay_token.clone(),
         paths.spool_dir(),
         paths.base.join("telemetry.jsonl"),
+        cfg.egress.clone(),
     );
 
     let mcp = if cfg.mcp_servers.is_empty() {
@@ -585,11 +762,12 @@ async fn serve(paths: Paths) -> Result<()> {
 
     let prices = cfg.price_table();
 
-    let embedder = Arc::new(embeddings::EmbeddingClient::new(
+    let embedder = Arc::new(embeddings::EmbeddingClient::with_egress(
         embeddings::EmbeddingProviderKind::parse(&cfg.semantic_cache.provider),
         cfg.semantic_cache.model.clone(),
         cfg.semantic_cache.base_url.clone(),
         http.clone(),
+        cfg.egress.clone(),
     ));
 
     let listen = cfg.listen.clone();

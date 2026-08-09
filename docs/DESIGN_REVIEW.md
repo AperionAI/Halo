@@ -387,3 +387,117 @@ created or its port can't be bound, that failure is logged and swallowed;
 `halo serve`'s core ingress still starts. The dashboard is a convenience
 surface layered on top of data the free tier already collects, not a
 dependency of it.
+
+## v1.4: egress allowlist, at-rest encryption, AI usage registry
+
+Three additive, default-off features closing the sovereignty/audit gap
+identified against Halo's own strategic roadmap: an operator can now (1)
+hard-constrain where Halo's traffic goes, (2) encrypt cached content at rest,
+and (3) export what's running as a governance artifact. All three ship free
+— they're safety/compliance primitives, not scale conveniences, so they don't
+belong behind the paid-tier line the way remote-kill or multi-seat do.
+
+**Egress allowlist (`crates/halo-shim/src/egress.rs`).** One shared
+`check_egress(cfg, url) -> Result<(), String>` helper, called at exactly three
+places: the LLM provider dispatch (`ingress.rs`), the embeddings API call
+(`embeddings.rs`), and the relay telemetry upload (`telemetry.rs`). Three
+explicit call sites were chosen over a wrapped shared HTTP client so a future
+fourth egress path can't silently bypass the check by construction — grepping
+for `.send().await` at review time has to find and justify every call site,
+rather than trusting a client that could grow a gap.
+
+The check is fail-closed and happens *at dispatch time, not at config-load
+time*: `EgressConfig::permits_host` is pure and re-evaluated on every call,
+so there's no window where a stale cached decision could be wrong. The
+embeddings path is the sovereignty-critical one — deny there means the
+semantic-cache lookup is skipped entirely (never "fall back to sending the
+prompt anyway"), because that's the one place raw prompt text would
+otherwise reach a third party beyond the chosen LLM provider. A denied LLM
+call gets its own `PolicyDecision::EgressDenied` telemetry event and audit
+entry (reusing the exact `finalize_llm_call` path `BudgetBlocked` already
+uses), so a denial is visible in `halo report` and the audit log, not just a
+one-line log message. A denied relay upload spools locally exactly like a
+network-down relay would — no new failure mode, just a new reason for the
+existing one.
+
+Deliberately NOT built: a `region_lock: us_only/eu_only` sugar that expands
+to a curated per-provider endpoint list. That's a maintenance liability (it
+goes stale the moment a provider adds a regional endpoint) sitting on top of
+a primitive (`allowed_upstreams`) that's already simple enough to hand-write
+correctly for the handful of hosts a real deployment touches.
+
+**At-rest encryption (`crates/halo-shim/src/vault.rs`, extracted from
+`keys.rs`).** The Argon2id + XChaCha20-Poly1305 envelope that already
+protected the credential-fallback file is generalized from `&str` to `&[u8]`
+and reused for `cache.redb` and `semantic_cache.redb`. `keys.rs` keeps its
+original `&str` helpers as one-line wrappers so its existing tests are
+untouched by the extraction — proof the refactor didn't change behavior for
+the credential path.
+
+What's sealed and what isn't, and why that split is safe:
+
+- **`cache.redb`**: the whole `CacheEntry` (response body, model, token
+  counts) is sealed; `created_at` is kept in cleartext at an outer
+  `StoredRecord {created_at, sealed, payload}` layer specifically so
+  eviction's age-sort never needs to decrypt every row just to find the
+  oldest ~10% — the eviction loop was already a batch scan before this
+  change, and making it also the most expensive Argon2id workload in the
+  process would be a real regression for a op that runs on the hot insert
+  path when the cache is full.
+- **`semantic_cache.redb`**: only `answer.text` (the actual generated
+  content) is sealed; the embedding vector, partition key, provider/model,
+  and `created_at` stay cleartext. This is a correctness requirement, not
+  just a performance one — `lookup()` scans every row in a partition and
+  cosine-compares its embedding against the live query on *every* call; if
+  the vector were sealed, every lookup would pay an Argon2id hash per
+  candidate row instead of one Argon2id hash for the single winning
+  candidate's answer. Embedding vectors are also not a content leak: they're
+  not invertible to the source text without the (never-stored) embedding
+  model itself, same reasoning the original semantic-cache design already
+  relied on.
+- **Never sealed anywhere**: the ledger, audit log, and telemetry log. All
+  three are metadata by construction (counts, costs, hashes, decisions) —
+  the trust invariant the whole telemetry schema is built on — so there is
+  no content in them to protect, and encrypting them would only make `halo
+  report`/the audit chain unreadable without the passphrase for no
+  confidentiality gain.
+
+**Back-compat is a hard requirement, not an afterthought**: encryption is
+opt-in on an existing install with rows already on disk. Both stores decode
+new-format bytes first and fall back to decoding the pre-refactor bare
+`CacheEntry`/`SemanticEntry` JSON on failure — required fields (no
+`#[serde(default)]`) on the new wrapper types make that fallback reliable
+rather than accidental, since a legacy row can never accidentally satisfy the
+new schema. A wrong or missing passphrase degrades a sealed row to "not
+found" (never a hard error, never a panic) at both the cache-get and
+semantic-lookup call sites, consistent with every other cache-miss path in
+Halo. The one deliberately non-graceful case is `encrypt_at_rest: true` with
+`$HALO_VAULT_PASSPHRASE` unset at `halo serve` startup — refusing to start is
+correct there because the operator explicitly asked for a guarantee, and
+silently degrading to plaintext would break it invisibly.
+
+**AI usage / governance registry (`crates/halo-shim/src/registry.rs`).** Pure
+projection over data three other subsystems already produce — virtual-key
+records (`keys.rs`) for the agent list, the existing `report::build` rollup
+for per-agent request/spend/savings, and `cfg.mcp_servers` for fronted MCP
+servers. No new instrumentation and no new trust surface: if `halo report`
+is already metadata-only-safe, the registry is too, by construction, since
+it's built from the exact same events. The one explicit guard worth calling
+out is `mcp_servers` — `RegistryMcp` carries `name`/`command` and
+deliberately has no field for `env`, so an MCP server config holding a
+secret in its environment (a real pattern: `env: { API_KEY: "..." }`) can
+never end up in an export a compliance reviewer might screenshot or forward.
+This is covered by an explicit test (`mcp_servers_never_carry_env`) that
+serializes a full report and asserts the secret value is absent from the
+JSON, not just that the struct has no such field — a belt-and-suspenders
+check against a future field rename accidentally reintroducing it.
+
+Exposed three ways for three different consumption modes: `halo registry
+export [--format json|csv] [--out path]` (headless — CI, a compliance
+pipeline, cron), `GET /api/registry` / `GET /api/registry.csv` on the local
+dashboard (interactive, human), and — deliberately not yet — a fleet-wide
+rollup on `halo-relay`. The relay rollup is a natural paid upsell (same
+`subject_attribution`/`multi_seat` gating the per-subject drill-down already
+uses) but was scoped out of v1.4: shipping the free, local registry first
+and adding the relay aggregate only if it gets real usage avoids building a
+multi-tenant aggregation surface speculatively.

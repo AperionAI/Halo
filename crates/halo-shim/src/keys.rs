@@ -9,8 +9,8 @@
 
 use crate::config::Paths;
 use crate::util::atomic_write_0600;
+use crate::vault::{self, EncBlob};
 use anyhow::{anyhow, Context, Result};
-use base64::Engine;
 use halo_common::telemetry::Provider;
 use halo_common::vkey::{VirtualKeyRecord, VKEY_PREFIX};
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,18 @@ use std::collections::BTreeMap;
 
 /// Keychain service namespace for Halo credentials.
 const KEYCHAIN_SERVICE: &str = "smartflow-halo";
+
+/// Which storage backend actually persisted a secret. Reported back so the
+/// CLI can tell the operator the truth about where their key landed instead
+/// of always claiming the OS keychain (the encrypted-file vault is used on
+/// headless boxes with no keychain).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretBackend {
+    /// The OS keychain (macOS Keychain / Linux keyutils / Windows Cred Mgr).
+    Keychain,
+    /// The Argon2id + XChaCha20-Poly1305 encrypted file (`cred-fallback.json`).
+    EncryptedFile,
+}
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct DeviceState {
@@ -72,14 +84,15 @@ impl KeyStore {
     }
 
     /// Register an agent: mint a virtual key, store the real provider secret,
-    /// and persist the record. Returns the minted virtual key.
+    /// and persist the record. Returns the minted virtual key and which
+    /// backend actually stored the secret (so the CLI can report it truthfully).
     pub fn issue(
         &self,
         agent_id: &str,
         provider: Provider,
         real_secret: &str,
         base_url: Option<String>,
-    ) -> Result<String> {
+    ) -> Result<(String, SecretBackend)> {
         if agent_id.is_empty() || agent_id.contains('_') {
             return Err(anyhow!(
                 "agent id must be non-empty and contain no underscores (got {agent_id:?})"
@@ -92,7 +105,8 @@ impl KeyStore {
         let random = uuid::Uuid::new_v4().simple().to_string();
         let vkey = format!("{VKEY_PREFIX}{agent_id}_{random}");
 
-        self.store_secret(agent_id, real_secret)
+        let backend = self
+            .store_secret(agent_id, real_secret)
             .context("storing provider secret")?;
 
         recs.push(VirtualKeyRecord {
@@ -104,7 +118,7 @@ impl KeyStore {
             base_url,
         });
         self.save_records(&recs)?;
-        Ok(vkey)
+        Ok((vkey, backend))
     }
 
     pub fn revoke(&self, agent_id: &str) -> Result<()> {
@@ -134,10 +148,10 @@ impl KeyStore {
 
     // ----- secret storage: keychain first, encrypted file fallback ---------
 
-    pub fn store_secret(&self, agent_id: &str, secret: &str) -> Result<()> {
+    pub fn store_secret(&self, agent_id: &str, secret: &str) -> Result<SecretBackend> {
         match keychain_entry(agent_id).and_then(|e| e.set_password(secret).map_err(Into::into)) {
-            Ok(()) => Ok(()),
-            Err(_) => self.fallback_store(agent_id, secret),
+            Ok(()) => Ok(SecretBackend::Keychain),
+            Err(keychain_err) => self.fallback_store(agent_id, secret, &keychain_err),
         }
     }
 
@@ -159,11 +173,13 @@ impl KeyStore {
 
     // ----- encrypted-file fallback -----------------------------------------
 
-    fn fallback_store(&self, agent_id: &str, secret: &str) -> Result<()> {
-        let pass = vault_passphrase().context(
-            "no OS keychain available and $HALO_VAULT_PASSPHRASE is unset; \
-             cannot store the provider secret securely",
-        )?;
+    fn fallback_store(
+        &self,
+        agent_id: &str,
+        secret: &str,
+        keychain_err: &anyhow::Error,
+    ) -> Result<SecretBackend> {
+        let pass = vault_passphrase().ok_or_else(|| headless_store_error(keychain_err))?;
         let mut file = self.read_fallback();
         file.secrets
             .insert(agent_id.to_string(), encrypt_secret(&pass, secret)?);
@@ -171,7 +187,7 @@ impl KeyStore {
             &self.paths.cred_fallback(),
             serde_json::to_vec_pretty(&file)?.as_slice(),
         )?;
-        Ok(())
+        Ok(SecretBackend::EncryptedFile)
     }
 
     fn fallback_get(&self, agent_id: &str) -> Result<String> {
@@ -208,6 +224,41 @@ fn keychain_entry(agent_id: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(KEYCHAIN_SERVICE, agent_id).map_err(|e| anyhow!("keychain: {e}"))
 }
 
+/// Build the error shown when the OS keychain is unreachable AND
+/// `$HALO_VAULT_PASSPHRASE` is unset, so neither storage backend can hold the
+/// secret. When the keychain failure looks like the macOS "no GUI session"
+/// case, say so explicitly -- otherwise the operator is left to infer why a
+/// documented feature failed on a headless box.
+fn headless_store_error(keychain_err: &anyhow::Error) -> anyhow::Error {
+    let detail = keychain_err.to_string();
+    if looks_like_no_gui_session(&detail) {
+        anyhow!(
+            "the OS keychain is unreachable because there is no interactive GUI login \
+             session -- this is expected on a headless box, or when reached via `sudo` \
+             over SSH ({detail}).\n\n\
+             Set $HALO_VAULT_PASSPHRASE to use the encrypted-file vault instead. See \
+             docs/HEADLESS.md for how to generate one, where to persist it, and note \
+             that it is required again on every `halo serve` start (not just now)."
+        )
+    } else {
+        anyhow!(
+            "no OS keychain available ({detail}) and $HALO_VAULT_PASSPHRASE is unset; \
+             cannot store the provider secret securely. Set $HALO_VAULT_PASSPHRASE to \
+             use the encrypted-file vault -- see docs/HEADLESS.md."
+        )
+    }
+}
+
+/// Heuristic for the macOS Keychain "User interaction is not allowed"
+/// error (errSecInteractionNotAllowed / -25308), which is what surfaces when
+/// the keychain is touched outside a GUI login session (headless / SSH+sudo).
+fn looks_like_no_gui_session(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("interaction is not allowed")
+        || e.contains("interaction not allowed")
+        || e.contains("25308")
+}
+
 fn vault_passphrase() -> Option<String> {
     std::env::var("HALO_VAULT_PASSPHRASE")
         .ok()
@@ -220,66 +271,16 @@ struct FallbackFile {
     secrets: BTreeMap<String, EncBlob>,
 }
 
-/// Envelope for one encrypted secret. All fields base64-standard.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EncBlob {
-    v: u8,
-    salt: String,
-    nonce: String,
-    ct: String,
-}
-
+/// Thin `&str` wrapper over `vault::seal_blob` -- kept so the on-disk
+/// `EncBlob` shape (and this module's existing tests) are unaffected by the
+/// `vault.rs` extraction.
 fn encrypt_secret(passphrase: &str, secret: &str) -> Result<EncBlob> {
-    use chacha20poly1305::aead::{Aead, KeyInit};
-    use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-
-    let mut salt = [0u8; 16];
-    let mut nonce = [0u8; 24];
-    getrandom::getrandom(&mut salt).map_err(|e| anyhow!("rng: {e}"))?;
-    getrandom::getrandom(&mut nonce).map_err(|e| anyhow!("rng: {e}"))?;
-
-    let key = derive_key(passphrase, &salt)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(&key).map_err(|e| anyhow!("cipher: {e}"))?;
-    let ct = cipher
-        .encrypt(XNonce::from_slice(&nonce), secret.as_bytes())
-        .map_err(|e| anyhow!("encrypt: {e}"))?;
-
-    let b64 = base64::engine::general_purpose::STANDARD;
-    Ok(EncBlob {
-        v: 1,
-        salt: b64.encode(salt),
-        nonce: b64.encode(nonce),
-        ct: b64.encode(ct),
-    })
+    vault::seal_blob(passphrase, secret.as_bytes())
 }
 
 fn decrypt_secret(passphrase: &str, blob: &EncBlob) -> Result<String> {
-    use chacha20poly1305::aead::{Aead, KeyInit};
-    use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-
-    let b64 = base64::engine::general_purpose::STANDARD;
-    let salt = b64.decode(&blob.salt).map_err(|e| anyhow!("b64 salt: {e}"))?;
-    let nonce = b64.decode(&blob.nonce).map_err(|e| anyhow!("b64 nonce: {e}"))?;
-    let ct = b64.decode(&blob.ct).map_err(|e| anyhow!("b64 ct: {e}"))?;
-    if nonce.len() != 24 {
-        return Err(anyhow!("bad nonce length"));
-    }
-
-    let key = derive_key(passphrase, &salt)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(&key).map_err(|e| anyhow!("cipher: {e}"))?;
-    let pt = cipher
-        .decrypt(XNonce::from_slice(&nonce), ct.as_ref())
-        .map_err(|_| anyhow!("decrypt failed (wrong passphrase or tampered file)"))?;
+    let pt = vault::open_blob(passphrase, blob)?;
     String::from_utf8(pt).map_err(|e| anyhow!("utf8: {e}"))
-}
-
-fn derive_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
-    use argon2::Argon2;
-    let mut key = [0u8; 32];
-    Argon2::default()
-        .hash_password_into(passphrase.as_bytes(), salt, &mut key)
-        .map_err(|e| anyhow!("argon2: {e}"))?;
-    Ok(key)
 }
 
 #[cfg(test)]
@@ -297,5 +298,24 @@ mod tests {
     fn wrong_passphrase_fails() {
         let blob = encrypt_secret("right", "sk-secret").unwrap();
         assert!(decrypt_secret("wrong", &blob).is_err());
+    }
+
+    #[test]
+    fn detects_no_gui_session_from_macos_error_text() {
+        assert!(looks_like_no_gui_session(
+            "keychain: User interaction is not allowed."
+        ));
+        assert!(looks_like_no_gui_session("SecKeychain error -25308"));
+        // Unrelated failures must not be mistaken for the headless case.
+        assert!(!looks_like_no_gui_session("keychain: item not found"));
+    }
+
+    #[test]
+    fn headless_error_names_the_vault_env_and_doc() {
+        let err = headless_store_error(&anyhow!("keychain: User interaction is not allowed."));
+        let msg = err.to_string();
+        assert!(msg.contains("HALO_VAULT_PASSPHRASE"));
+        assert!(msg.contains("docs/HEADLESS.md"));
+        assert!(msg.contains("GUI login session"));
     }
 }

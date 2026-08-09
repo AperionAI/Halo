@@ -31,7 +31,8 @@
 //! exists to avoid.
 
 use crate::answer::AnswerExtract;
-use anyhow::Result;
+use crate::vault;
+use anyhow::{anyhow, Result};
 use halo_common::telemetry::Provider;
 use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition};
 use serde::{Deserialize, Serialize};
@@ -59,13 +60,40 @@ pub struct SemanticEntry {
     pub created_at: i64,
 }
 
+/// On-disk shape. `embedding`/`partition`/`created_at` etc. stay cleartext --
+/// they're needed to filter and cosine-rank every row on every lookup, and
+/// none of them are reversible to the original prompt/response text (see
+/// module docs). Only the stored answer (the actual generated content) is
+/// ever sealed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredSemanticEntry {
+    embedding: Vec<f32>,
+    partition: String,
+    origin_provider: Provider,
+    origin_model: String,
+    tokens_out: u64,
+    created_at: i64,
+    /// True if `answer_payload` is a vault-sealed blob wrapping the JSON of
+    /// an `AnswerExtract`; false if it's that JSON directly.
+    answer_sealed: bool,
+    answer_payload: Vec<u8>,
+}
+
 pub struct SemanticCacheStore {
     db: Database,
     max_entries: u64,
+    /// `Some(passphrase)` when `encrypt_at_rest` is on. See `cache.rs` for
+    /// the identical rationale/back-compat behavior applied here.
+    encrypt: Option<String>,
 }
 
 impl SemanticCacheStore {
+    #[allow(dead_code)] // convenience wrapper used by tests; production always calls open_with_encryption
     pub fn open(path: &Path, max_entries: u64) -> Result<Arc<Self>> {
+        Self::open_with_encryption(path, max_entries, None)
+    }
+
+    pub fn open_with_encryption(path: &Path, max_entries: u64, encrypt: Option<String>) -> Result<Arc<Self>> {
         let db = Database::create(path)?;
         {
             let w = db.begin_write()?;
@@ -77,35 +105,59 @@ impl SemanticCacheStore {
         Ok(Arc::new(Self {
             db,
             max_entries: max_entries.max(1),
+            encrypt,
         }))
     }
 
     /// Best match within `partition` at or above `threshold`, or `None`.
     /// Always re-checks cosine similarity against the live query vector --
     /// the partition only narrows candidates, it never substitutes for the
-    /// similarity check.
+    /// similarity check. The answer text is only decrypted once, for the
+    /// single winning candidate, not for every row scanned.
     pub fn lookup(&self, partition: &str, query_vec: &[f32], threshold: f32) -> Result<Option<(SemanticEntry, f32)>> {
         let rtxn = self.db.begin_read()?;
         let table = rtxn.open_table(TABLE)?;
-        let mut best: Option<(SemanticEntry, f32)> = None;
+        let mut best: Option<(StoredSemanticEntry, f32)> = None;
         for row in table.iter()? {
             let (_, v) = row?;
-            let Ok(entry) = serde_json::from_slice::<SemanticEntry>(v.value()) else {
+            let Some(stored) = decode_stored(v.value()) else {
                 continue;
             };
-            if entry.partition != partition {
+            if stored.partition != partition {
                 continue;
             }
-            let sim = cosine(query_vec, &entry.embedding);
+            let sim = cosine(query_vec, &stored.embedding);
             if sim >= threshold && best.as_ref().map(|(_, s)| sim > *s).unwrap_or(true) {
-                best = Some((entry, sim));
+                best = Some((stored, sim));
             }
         }
-        Ok(best)
+        match best {
+            Some((stored, sim)) => match self.reify(stored) {
+                Ok(entry) => Ok(Some((entry, sim))),
+                // Sealed but unreadable (wrong/missing passphrase): treat as
+                // a miss, same as `cache.rs` -- never a hard failure.
+                Err(_) => Ok(None),
+            },
+            None => Ok(None),
+        }
     }
 
     pub fn store(&self, key: &str, entry: &SemanticEntry) -> Result<()> {
-        let bytes = serde_json::to_vec(entry)?;
+        let answer_json = serde_json::to_vec(&entry.answer)?;
+        let (answer_sealed, answer_payload) = match &self.encrypt {
+            Some(pass) => (true, vault::seal(pass, &answer_json)?),
+            None => (false, answer_json),
+        };
+        let bytes = serde_json::to_vec(&StoredSemanticEntry {
+            embedding: entry.embedding.clone(),
+            partition: entry.partition.clone(),
+            origin_provider: entry.origin_provider,
+            origin_model: entry.origin_model.clone(),
+            tokens_out: entry.tokens_out,
+            created_at: entry.created_at,
+            answer_sealed,
+            answer_payload,
+        })?;
         let wtxn = self.db.begin_write()?;
         {
             let mut table = wtxn.open_table(TABLE)?;
@@ -115,9 +167,7 @@ impl SemanticCacheStore {
                 let mut aged: Vec<(i64, String)> = Vec::new();
                 for row in table.iter()? {
                     let (k, v) = row?;
-                    let created = serde_json::from_slice::<SemanticEntry>(v.value())
-                        .map(|e| e.created_at)
-                        .unwrap_or(0);
+                    let created = decode_stored(v.value()).map(|s| s.created_at).unwrap_or(0);
                     aged.push((created, k.value().to_string()));
                 }
                 aged.sort_by_key(|(c, _)| *c);
@@ -133,12 +183,55 @@ impl SemanticCacheStore {
         Ok(())
     }
 
+    /// Turn a `StoredSemanticEntry` back into the in-memory `SemanticEntry`,
+    /// unsealing the answer if needed.
+    fn reify(&self, stored: StoredSemanticEntry) -> Result<SemanticEntry> {
+        let answer_json = if stored.answer_sealed {
+            let pass = self.encrypt.as_deref().ok_or_else(|| {
+                anyhow!("semantic cache entry is sealed but no encryption passphrase is configured")
+            })?;
+            vault::open(pass, &stored.answer_payload)?
+        } else {
+            stored.answer_payload
+        };
+        let answer: AnswerExtract = serde_json::from_slice(&answer_json)?;
+        Ok(SemanticEntry {
+            embedding: stored.embedding,
+            partition: stored.partition,
+            answer,
+            origin_provider: stored.origin_provider,
+            origin_model: stored.origin_model,
+            tokens_out: stored.tokens_out,
+            created_at: stored.created_at,
+        })
+    }
+
     #[allow(dead_code)] // used by tests and `halo status` diagnostics
     pub fn len(&self) -> Result<u64> {
         let rtxn = self.db.begin_read()?;
         let table = rtxn.open_table(TABLE)?;
         Ok(table.len()?)
     }
+}
+
+/// Decode a raw redb value into a `StoredSemanticEntry`, falling back to
+/// treating it as a legacy pre-encryption-refactor `SemanticEntry` (bare,
+/// unsealed) if the new-format decode fails.
+fn decode_stored(raw: &[u8]) -> Option<StoredSemanticEntry> {
+    if let Ok(s) = serde_json::from_slice::<StoredSemanticEntry>(raw) {
+        return Some(s);
+    }
+    let legacy: SemanticEntry = serde_json::from_slice(raw).ok()?;
+    Some(StoredSemanticEntry {
+        embedding: legacy.embedding,
+        partition: legacy.partition,
+        origin_provider: legacy.origin_provider,
+        origin_model: legacy.origin_model,
+        tokens_out: legacy.tokens_out,
+        created_at: legacy.created_at,
+        answer_sealed: false,
+        answer_payload: serde_json::to_vec(&legacy.answer).unwrap_or_default(),
+    })
 }
 
 /// Cosine similarity in [-1, 1]; 0 for mismatched lengths or a zero vector.
@@ -357,6 +450,48 @@ mod tests {
         store.store("k1", &entry("hi", "primary:general:abc", vec![1.0, 0.0])).unwrap();
         let got = store.lookup("primary:troubleshooting:abc", &[1.0, 0.0], 0.90).unwrap();
         assert!(got.is_none());
+    }
+
+    #[test]
+    fn encrypted_store_roundtrips_answer_text() {
+        let tmp = TempDir::new().unwrap();
+        let store =
+            SemanticCacheStore::open_with_encryption(&tmp.path().join("s.redb"), 100, Some("pass".to_string()))
+                .unwrap();
+        store
+            .store("k1", &entry("the sensitive generated answer", "primary:general:abc", vec![1.0, 0.0]))
+            .unwrap();
+        let (got, sim) = store.lookup("primary:general:abc", &[1.0, 0.0], 0.90).unwrap().unwrap();
+        assert_eq!(got.answer.text, "the sensitive generated answer");
+        assert!(sim > 0.99);
+    }
+
+    #[test]
+    fn encrypted_store_is_unreadable_with_wrong_passphrase() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("s.redb");
+        {
+            let store = SemanticCacheStore::open_with_encryption(&path, 100, Some("right".to_string())).unwrap();
+            store.store("k1", &entry("secret answer", "primary:general:abc", vec![1.0, 0.0])).unwrap();
+        }
+        let store2 = SemanticCacheStore::open_with_encryption(&path, 100, Some("wrong".to_string())).unwrap();
+        let got = store2.lookup("primary:general:abc", &[1.0, 0.0], 0.90).unwrap();
+        assert!(got.is_none(), "wrong passphrase must not decrypt the answer");
+    }
+
+    #[test]
+    fn pre_encryption_row_still_lookup_able_after_enabling_encryption() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("s.redb");
+        {
+            let store = SemanticCacheStore::open(&path, 100).unwrap();
+            store
+                .store("k1", &entry("written before encryption existed", "primary:general:abc", vec![1.0, 0.0]))
+                .unwrap();
+        }
+        let store2 = SemanticCacheStore::open_with_encryption(&path, 100, Some("pass".to_string())).unwrap();
+        let (got, _) = store2.lookup("primary:general:abc", &[1.0, 0.0], 0.90).unwrap().unwrap();
+        assert_eq!(got.answer.text, "written before encryption existed");
     }
 
     #[test]

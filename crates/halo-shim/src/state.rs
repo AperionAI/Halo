@@ -115,6 +115,24 @@ impl AppState {
             let _ = self.ledger.record(&o.agent, actual_cost);
         }
 
+        // One terse line per completed request. At the default `info` level
+        // (stderr) this makes traffic visible in the foreground in real time --
+        // without it, `halo serve` prints a banner and then goes silent while
+        // requests flow, which reads as "dead". Quiet it with `RUST_LOG=warn`.
+        let cache_hit = matches!(
+            o.decision,
+            PolicyDecision::CacheHit | PolicyDecision::SemanticCacheHit
+        );
+        tracing::info!(
+            agent = %o.agent,
+            model = %o.model,
+            tokens_in = o.tokens_in,
+            tokens_out = o.tokens_out,
+            cost = %format!("${actual_cost:.4}"),
+            cache = if cache_hit { "hit" } else { "miss" },
+            "request"
+        );
+
         self.emit(TelemetryEvent {
             device_id: self.device_id.clone(),
             agent_id: o.agent.clone(),
@@ -132,10 +150,7 @@ impl AppState {
             // locally (ledger + audit below); folding it into the relay's
             // cross-device aggregate too would be a rounding-level nicety,
             // not a correctness requirement (see docs/DESIGN_REVIEW.md).
-            cache_hit: matches!(
-                o.decision,
-                PolicyDecision::CacheHit | PolicyDecision::SemanticCacheHit
-            ),
+            cache_hit,
             task_class: o.task_class.clone(),
             latency_ms: o.latency_ms,
             estimated_cost: actual_cost,

@@ -11,6 +11,7 @@
 //! uploaded. No prompt/response text, no tool args, no vectors. The schema is
 //! defined once in `halo-common` and published verbatim in the docs.
 
+use crate::config::EgressConfig;
 use anyhow::Result;
 use halo_common::telemetry::{TelemetryBatch, TelemetryEvent};
 use std::io::Write;
@@ -30,6 +31,9 @@ struct Inner {
     client: reqwest::Client,
     buffer: Mutex<Vec<TelemetryEvent>>,
     batch_size: usize,
+    /// Checked before every relay upload, same policy as the LLM provider and
+    /// embeddings egress. Defaults to unrestricted.
+    egress: EgressConfig,
 }
 
 #[derive(Clone)]
@@ -45,6 +49,18 @@ impl Telemetry {
         spool_dir: PathBuf,
         log_path: PathBuf,
     ) -> Self {
+        Self::with_egress(device_id, relay_url, relay_token, spool_dir, log_path, EgressConfig::default())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_egress(
+        device_id: String,
+        relay_url: Option<String>,
+        relay_token: Option<String>,
+        spool_dir: PathBuf,
+        log_path: PathBuf,
+        egress: EgressConfig,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
@@ -59,6 +75,7 @@ impl Telemetry {
                 client,
                 buffer: Mutex::new(Vec::new()),
                 batch_size: 32,
+                egress,
             }),
         }
     }
@@ -107,6 +124,13 @@ impl Telemetry {
 
     async fn upload(&self, relay: &str, events: &[TelemetryEvent]) -> Result<()> {
         let url = format!("{}{}", relay.trim_end_matches('/'), INGEST_PATH);
+        if let Err(host) = crate::egress::check_egress(&self.inner.egress, &url) {
+            // Fail like any other upload failure -- caller spools to disk and
+            // retries later. Logged once so a misconfigured allowlist is
+            // diagnosable without silently losing telemetry forever.
+            tracing::warn!("Halo egress policy denied relay upload to \"{host}\"; spooling locally");
+            anyhow::bail!("egress policy denied relay upload to \"{host}\"");
+        }
         let body = TelemetryBatch {
             device_id: self.inner.device_id.clone(),
             events: events.to_vec(),

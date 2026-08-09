@@ -476,6 +476,34 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
     };
     let base = provider_base(provider, record.base_url.as_deref());
     let url = format!("{base}{}", kind.upstream_path());
+    if let Err(denied_host) = crate::egress::check_egress(&st.cfg.egress, &url) {
+        st.finalize_llm_call(LlmOutcome {
+            agent: agent.clone(),
+            subject: subject.clone(),
+            provider,
+            model: model.clone(),
+            tokens_in: 0,
+            tokens_out: 0,
+            tokens_cached: 0,
+            task_class: kind.task_class().into(),
+            latency_ms: 0,
+            compression_ratio,
+            decision: PolicyDecision::EgressDenied,
+            error_class: "egress_denied".to_string(),
+            record_spend: false,
+            streamed: false,
+            actual_cost_override: None,
+        })
+        .await;
+        return error_response(
+            StatusCode::FORBIDDEN,
+            &format!(
+                "Halo egress policy denied this request: \"{denied_host}\" is not on \
+                 egress.allowed_upstreams in ~/.halo/config.yaml. Add it there if this \
+                 provider endpoint is expected."
+            ),
+        );
+    }
     let started = std::time::Instant::now();
     let mut req = st
         .http

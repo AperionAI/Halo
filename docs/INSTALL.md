@@ -33,8 +33,18 @@ Downloads the matching prebuilt tarball, verifies its SHA-256, and drops `halo`
 + `halo-relay` onto your PATH. Pin a version or relocate:
 
 ```bash
-HALO_VERSION=halo-v1.2.0 HALO_INSTALL_DIR=~/.local/bin \
+HALO_VERSION=halo-v1.3.0 HALO_INSTALL_DIR=~/.local/bin \
   curl -fsSL https://halo-get.aperion.ai | sh
+```
+
+`HALO_INSTALL_DIR` controls where the binaries land. Without it the script uses
+`/usr/local/bin` if writable, else your personal `~/.local/bin`. **On a
+multi-user / agent box, set it to a shared dir** (`/usr/local/bin`) so the
+service user that runs the proxy can actually find `halo` -- a `~/.local/bin`
+install belongs to whoever ran the installer and is invisible to other users:
+
+```bash
+HALO_INSTALL_DIR=/usr/local/bin sudo -E sh -c 'curl -fsSL https://halo-get.aperion.ai | sh'
 ```
 
 Windows: grab the `.zip` from the [releases page](https://github.com/AperionAI/halo-dist/releases).

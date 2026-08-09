@@ -16,7 +16,7 @@ REPO="${HALO_DIST_REPO:-AperionAI/halo-dist}"
 BIN="halo"
 # Override with HALO_INSTALL_DIR=... to change the destination.
 INSTALL_DIR="${HALO_INSTALL_DIR:-}"
-# Override with HALO_VERSION=halo-v1.2.0 to pin; default is the latest release.
+# Override with HALO_VERSION=halo-v1.3.0 to pin; default is the latest release.
 VERSION="${HALO_VERSION:-latest}"
 
 err() { echo "halo-install: $*" >&2; exit 1; }
@@ -87,6 +87,15 @@ main() {
   [ -f "$extracted/halo-relay" ] && install -m 0755 "$extracted/halo-relay" "$dir/halo-relay"
 
   echo "halo-install: installed to $dir"
+
+  # On a multi-user / agent box the proxy typically runs as a service user, so
+  # a per-user ~/.local/bin install is invisible to it. Point that out and how
+  # to fix it, since HALO_INSTALL_DIR is otherwise undiscoverable.
+  if [ -z "$INSTALL_DIR" ] && [ "$dir" = "$HOME/.local/bin" ]; then
+    echo "halo-install: NOTE: installed to your personal $HOME/.local/bin -- only visible to $(whoami)."
+    echo "  If a service user (e.g. the one your agent runtime runs as) needs it, install to a shared dir:"
+    echo "    HALO_INSTALL_DIR=/usr/local/bin sudo -E sh -c 'curl -fsSL https://halo-get.aperion.ai | sh'"
+  fi
   case ":$PATH:" in
     *":$dir:"*) : ;;
     *) echo "halo-install: NOTE: $dir is not on your PATH. Add it, e.g.:"

@@ -80,6 +80,25 @@ pub struct Config {
     /// relay, no network, no account -- free tier). See `dashboard.rs`.
     #[serde(default)]
     pub dashboard: DashboardConfig,
+
+    /// Outbound egress policy. Empty (default) = unrestricted, today's
+    /// behavior. Non-empty = every egress Halo itself initiates (the LLM
+    /// provider, the embeddings API, and the relay upload) is checked against
+    /// this list first and hard-denied if the host isn't on it -- enforced at
+    /// dispatch time, not just logged. Opt-in and additive: an existing
+    /// install with no `egress:` block behaves exactly as before.
+    #[serde(default)]
+    pub egress: EgressConfig,
+
+    /// Encrypt the content-bearing local stores (`cache.redb`'s response
+    /// bodies, `semantic_cache.redb`'s stored answer text) at rest, keyed off
+    /// `$HALO_VAULT_PASSPHRASE` (the same env var the credential fallback
+    /// already uses). Off by default -- no behavior change for existing
+    /// installs. When true and the passphrase is unset, `halo serve` refuses
+    /// to start: this is the one case where a missing passphrase should
+    /// block, because the operator explicitly asked for encryption.
+    #[serde(default)]
+    pub encrypt_at_rest: bool,
 }
 
 fn default_listen() -> String {
@@ -101,7 +120,48 @@ impl Default for Config {
             mcp_servers: Vec::new(),
             price_overrides: Vec::new(),
             dashboard: DashboardConfig::default(),
+            egress: EgressConfig::default(),
+            encrypt_at_rest: false,
         }
+    }
+}
+
+/// Outbound egress allowlist. See the field doc on `Config::egress`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EgressConfig {
+    /// Host names Halo is permitted to send requests to. Empty = allow all
+    /// (unrestricted). Matched case-insensitively; a rule beginning with `.`
+    /// matches any subdomain (and the apex) of that suffix, e.g. `.example.com`
+    /// matches `api.example.com` and `example.com`, but NOT `evil-example.com`.
+    /// No scheme, no port, no path -- host only.
+    #[serde(default)]
+    pub allowed_upstreams: Vec<String>,
+}
+
+impl EgressConfig {
+    /// True if `host` is permitted -- either no policy is configured (allow
+    /// all) or `host` matches an entry exactly or via a `.`-prefixed
+    /// subdomain wildcard.
+    pub fn permits_host(&self, host: &str) -> bool {
+        if self.allowed_upstreams.is_empty() {
+            return true;
+        }
+        let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+        self.allowed_upstreams.iter().any(|rule| {
+            let rule = rule.trim().to_ascii_lowercase();
+            match rule.strip_prefix('.') {
+                Some(suffix) if !suffix.is_empty() => {
+                    host == suffix || host.ends_with(&format!(".{suffix}"))
+                }
+                _ => host == rule,
+            }
+        })
+    }
+
+    /// True if any allowlist is configured at all (used for `halo status` /
+    /// dashboard display of the current egress policy).
+    pub fn is_restricted(&self) -> bool {
+        !self.allowed_upstreams.is_empty()
     }
 }
 
@@ -415,5 +475,57 @@ impl Config {
             );
         }
         prices
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_allowlist_permits_everything() {
+        let e = EgressConfig::default();
+        assert!(e.permits_host("api.anthropic.com"));
+        assert!(e.permits_host("anything.example.net"));
+        assert!(!e.is_restricted());
+    }
+
+    #[test]
+    fn exact_match_is_permitted_others_denied() {
+        let e = EgressConfig {
+            allowed_upstreams: vec!["api.anthropic.com".to_string()],
+        };
+        assert!(e.is_restricted());
+        assert!(e.permits_host("api.anthropic.com"));
+        assert!(!e.permits_host("api.openai.com"));
+    }
+
+    #[test]
+    fn dot_prefix_wildcard_matches_subdomain_and_apex() {
+        let e = EgressConfig {
+            allowed_upstreams: vec![".example.com".to_string()],
+        };
+        assert!(e.permits_host("example.com"));
+        assert!(e.permits_host("api.example.com"));
+        assert!(e.permits_host("deep.sub.example.com"));
+    }
+
+    #[test]
+    fn wildcard_does_not_match_lookalike_suffix() {
+        let e = EgressConfig {
+            allowed_upstreams: vec![".example.com".to_string()],
+        };
+        // "evil-example.com" ends with "example.com" as a raw string but is
+        // NOT a subdomain of it -- must not match.
+        assert!(!e.permits_host("evil-example.com"));
+    }
+
+    #[test]
+    fn matching_is_case_insensitive_and_ignores_trailing_dot() {
+        let e = EgressConfig {
+            allowed_upstreams: vec!["API.Anthropic.com".to_string()],
+        };
+        assert!(e.permits_host("api.anthropic.com."));
+        assert!(e.permits_host("API.ANTHROPIC.COM"));
     }
 }
