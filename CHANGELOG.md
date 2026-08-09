@@ -1,6 +1,9 @@
 # Changelog
 
-## 1.3.0
+## 1.3.1
+
+(1.3.0 was published earlier from a pre-release commit; this is the first build
+carrying the changes below.)
 
 Focused on the headless / always-on box story after the beta 1 field report:
 the product worked, but the documented install path assumed an interactive
@@ -40,7 +43,7 @@ fixes the smaller "misleading or silently wrong" papercuts alongside it.
   a shell-history warning.
 - **Version alignment.** The binary version now matches the public `halo-vX.Y.Z`
   release tags and the one-pager (was an internal `0.2.x` that disagreed with the
-  `v1.x` docs; `halo --version` now reports `1.3.0`).
+  `v1.x` docs; `halo --version` now reports `1.3.1`).
 - **Sample config no longer trips the free-tier warning.** `claw-box.config.yaml`
   ships `semantic_cache.max_entries: 200`, and the ceiling warning only fires
   when the semantic cache is actually enabled.

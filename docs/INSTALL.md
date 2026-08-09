@@ -33,7 +33,7 @@ Downloads the matching prebuilt tarball, verifies its SHA-256, and drops `halo`
 + `halo-relay` onto your PATH. Pin a version or relocate:
 
 ```bash
-HALO_VERSION=halo-v1.3.0 HALO_INSTALL_DIR=~/.local/bin \
+HALO_VERSION=halo-v1.3.1 HALO_INSTALL_DIR=~/.local/bin \
   curl -fsSL https://halo-get.aperion.ai | sh
 ```
 
