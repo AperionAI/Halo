@@ -142,7 +142,7 @@ Put this on your OpenClaw upgrade checklist.
 
 *The config-patch recipe, the SSRF/`allowPrivateNetwork` and `models`-array
 gotchas, the auth-store precedence, and the two-check `lsof` verification are
-lifted verbatim from Craig's field-verified operator runbook (§6 config, §7
-verification) -- status there is "verified end-to-end on macOS (Apple Silicon)
-against OpenClaw." The Linux equivalent is structurally the same but untested in
-the field; treat it as a starting point.*
+lifted verbatim from a field-verified operator runbook contributed by an early
+adopter -- verified end-to-end on macOS (Apple Silicon) against OpenClaw. The
+Linux equivalent is structurally the same but untested in the field; treat it
+as a starting point.*

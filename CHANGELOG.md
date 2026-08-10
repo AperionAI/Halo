@@ -2,10 +2,10 @@
 
 ## 1.3.3
 
-Craig sent his field-verified operator runbook after 1.3.2 shipped. It confirmed
-the 1.3.2 correction was pointed the right direction but got some exact values
-wrong (reconstructed from a description, not his verified copy), and it surfaced
-one real gap in the service installer itself.
+A field-verified operator runbook came in from an early adopter after 1.3.2
+shipped. It confirmed the 1.3.2 correction was pointed the right direction but
+got some exact values wrong (reconstructed from a description, not a verified
+copy), and it surfaced one real gap in the service installer itself.
 
 ### Fixed
 
@@ -123,6 +123,6 @@ fixes the smaller "misleading or silently wrong" papercuts alongside it.
 
 ### Verification
 
-Re-verify P0 items end-to-end on the same Mac mini M1 / OpenClaw box that
+Re-verify P0 items end-to-end on the same headless macOS / OpenClaw box that
 produced the field report (headless keychain path, `halo service install`,
 OpenClaw env injection).
