@@ -102,11 +102,13 @@ export ANTHROPIC_API_KEY=sf_live_claw_xxxxxxxxxxxxxxxx
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
 ```
 
-> **Running the OpenClaw Gateway?** *Where* it reads these from is not obvious
-> (a generated env file, not the main config, and its CLI rejects pasted API
-> keys). See [`OPENCLAW_INTEGRATION.md`](./OPENCLAW_INTEGRATION.md) for the
-> exact file, the env-over-profile precedence that makes this clean, and the
-> upgrade landmine to watch for.
+> **Running the OpenClaw Gateway?** These env vars **do not work for OpenClaw** --
+> it ignores the process environment on service installs and reads its key and
+> endpoint from its own config + auth store instead. You'll need a config patch
+> in `openclaw.json` plus the virtual key written into the agent's
+> `auth-profiles.json`. See [`OPENCLAW_INTEGRATION.md`](./OPENCLAW_INTEGRATION.md)
+> for the exact recipe, the two gotchas, and how to verify with `lsof` that
+> traffic is actually going through Halo.
 
 Restart Claw. It should work exactly as before -- Halo is a transparent
 passthrough for normal traffic; the only difference is what happens at the

@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.3.2 (docs)
+
+Docs-only correction from a second field report. No binary change.
+
+### Fixed
+
+- **OpenClaw integration was documented wrong and is now corrected.** The
+  previous guidance said to set `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` in the
+  gateway's environment. **That does not work on OpenClaw service installs** --
+  `env.shellEnv.enabled` is off by default, so the gateway ignores the process
+  environment and reads its key/endpoint from its own config + auth store,
+  sending traffic straight to the provider while looking correctly configured
+  (no cap, no metering, no error). `docs/OPENCLAW_INTEGRATION.md` now documents
+  the method that was proven in the field: a provider override in `openclaw.json`
+  (with the required `models` array and `request.allowPrivateNetwork: true` for
+  the SSRF guard), Halo's virtual key written into the agent's
+  `auth-profiles.json` (which takes precedence over `models.providers.*.apiKey`),
+  and a gateway restart. README and `CLAW_BOX_SETUP.md` updated to match.
+- **Verification now requires two checks.** A rising request count in
+  `halo report` is necessary but not sufficient (a partial bypass can coexist
+  with it). Docs now call for `lsof` on the running gateway during real traffic
+  to confirm a `127.0.0.1:8787` connection and no direct `:443` to the provider.
+- **`docs/UPGRADING.md`** now covers moving an existing `~/.halo` store into a
+  `halo service install` (it does not migrate automatically; the new service
+  passphrase means the sealed key must be re-registered) and confirms the
+  0.2.x → 1.3.x on-disk format is unchanged (the version jump was a
+  release-numbering change, not a data-format break).
+
 ## 1.3.1
 
 (1.3.0 was published earlier from a pre-release commit; this is the first build
@@ -20,10 +48,9 @@ fixes the smaller "misleading or silently wrong" papercuts alongside it.
 - **`docs/HEADLESS.md`** -- why the OS keychain is unreachable without a GUI
   session, and how to use the encrypted-file vault (`$HALO_VAULT_PASSPHRASE`):
   generating one, storing it, and that it's needed on every `halo serve` start.
-- **`docs/OPENCLAW_INTEGRATION.md`** -- worked OpenClaw example: where the
-  gateway actually reads `ANTHROPIC_*` from (a generated env file), the
-  env-over-profile precedence that makes the integration clean, and the
-  upgrade landmine that can silently drop the config.
+- **`docs/OPENCLAW_INTEGRATION.md`** -- worked OpenClaw example. (The method
+  described in this release was later found to be wrong for service installs and
+  corrected in 1.3.2 -- see above.)
 - **Per-request log line.** `halo serve` now prints one terse line per request
   (agent, model, tokens, cost, cache hit/miss) at the default log level, so the
   foreground proxy no longer looks dead while traffic flows. Quiet with

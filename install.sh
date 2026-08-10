@@ -16,7 +16,7 @@ REPO="${HALO_DIST_REPO:-AperionAI/halo-dist}"
 BIN="halo"
 # Override with HALO_INSTALL_DIR=... to change the destination.
 INSTALL_DIR="${HALO_INSTALL_DIR:-}"
-# Override with HALO_VERSION=halo-v1.3.1 to pin; default is the latest release.
+# Override with HALO_VERSION=halo-v1.3.2 to pin; default is the latest release.
 VERSION="${HALO_VERSION:-latest}"
 
 err() { echo "halo-install: $*" >&2; exit 1; }

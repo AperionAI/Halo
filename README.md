@@ -97,8 +97,11 @@ than leaving `halo serve` in a terminal.
 Anthropic works the same way (`--provider anthropic`, then set
 `ANTHROPIC_API_KEY` to the virtual key and `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`).
 
-Running the OpenClaw Gateway? See [`docs/OPENCLAW_INTEGRATION.md`](docs/OPENCLAW_INTEGRATION.md)
-for exactly where it reads those env vars from and the upgrade gotcha to watch.
+Running the OpenClaw Gateway? Those env vars **do not work for OpenClaw** -- it
+ignores the process environment on service installs and reads its key/endpoint
+from its own config + auth store. See
+[`docs/OPENCLAW_INTEGRATION.md`](docs/OPENCLAW_INTEGRATION.md) for the config-patch
+recipe, the SSRF/`models`-array gotchas, and the `lsof` verification.
 
 Any OpenAI-compatible third party (Groq, Together, Fireworks, a local
 vLLM/Ollama server) works too — add `--base-url` to `agent add`:

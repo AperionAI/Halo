@@ -30,7 +30,7 @@ HALO_INSTALL_DIR=/usr/local/bin sudo -E sh -c 'curl -fsSL https://halo-get.aperi
 Pin a specific version instead of latest:
 
 ```bash
-HALO_VERSION=halo-v1.3.1 HALO_INSTALL_DIR=/usr/local/bin \
+HALO_VERSION=halo-v1.3.2 HALO_INSTALL_DIR=/usr/local/bin \
   sudo -E sh -c 'curl -fsSL https://halo-get.aperion.ai | sh'
 ```
 
@@ -43,7 +43,7 @@ Confirm it took:
 ### If you run the Docker image
 
 ```bash
-docker pull ghcr.io/aperionai/halo:latest      # or pin :1.3.1
+docker pull ghcr.io/aperionai/halo:latest      # or pin :1.3.2
 docker compose up -d halo                       # recreate the container
 ```
 
@@ -84,20 +84,75 @@ reading a different, empty store -- not a metering failure.
 Send one real request through your agent, then re-run `halo report`; the request
 should show up with a cost.
 
-## 5. OpenClaw only: re-check the env after any OpenClaw change
+## 5. OpenClaw only: re-verify the integration after any OpenClaw change
 
-OpenClaw regenerates `service-env/ai.openclaw.gateway.env`, and an OpenClaw
-upgrade (or reinstall) can silently drop the two Halo lines, sending traffic
-straight back to Anthropic with no cap and no visibility. After **any** OpenClaw
-change, confirm those lines are still present:
+> **Do NOT rely on `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` for OpenClaw.**
+> The OpenClaw Gateway ignores the process environment on service installs
+> (`env.shellEnv.enabled` is off by default), so setting those env vars does
+> nothing and leaves you running unmetered while looking protected. The
+> integration is a config patch in `openclaw.json` plus the virtual key in the
+> agent's `auth-profiles.json` -- see [`OPENCLAW_INTEGRATION.md`](./OPENCLAW_INTEGRATION.md).
 
-```
-ANTHROPIC_API_KEY=sf_live_...        # your Halo virtual key
-ANTHROPIC_BASE_URL=http://127.0.0.1:8787
-```
+An OpenClaw upgrade or reconfigure can rewrite `openclaw.json` and/or the auth
+profile and quietly revert the override. After **any** OpenClaw change, re-apply
+the integration and re-verify with **both** checks:
 
-Re-add them and restart the gateway if they're gone. Full detail:
+1. `halo report` shows the request count rising (necessary, not sufficient), and
+2. `lsof` on the running gateway shows a connection to `127.0.0.1:8787` and
+   **no** direct `:443` to the provider during real agent traffic.
+
+Only the `lsof` check proves you're actually in the loop. Full detail, including
+the exact `lsof` command:
 [`OPENCLAW_INTEGRATION.md`](./OPENCLAW_INTEGRATION.md).
+
+## Moving an existing data dir into a service install
+
+`halo service install` pins the store to `/usr/local/var/halo` and **does not
+migrate** anything. If you've been running a hand-built LaunchDaemon (or plain
+`halo serve`) whose store lives in the service user's `~/.halo`, switching to the
+service install starts from an **empty** store unless you copy the old one across
+first.
+
+Do it while nothing is running:
+
+```bash
+sudo launchctl bootout system/ai.aperion.halo 2>/dev/null   # stop the service if already installed
+sudo mkdir -p /usr/local/var/halo
+# copy the ledger, caches, audit log, state (stop the process first so the
+# redb files are quiescent):
+sudo cp -a ~/.halo/. /usr/local/var/halo/
+sudo chown -R <service-user> /usr/local/var/halo
+sudo launchctl kickstart -k system/ai.aperion.halo
+halo report   # confirm the ledger total carried over
+```
+
+One thing that does **not** carry over cleanly: the sealed provider key.
+`halo service install` generates a **new** vault passphrase, so an encrypted-file
+key (`cred-fallback.json`) sealed under your old passphrase won't decrypt. After
+copying the store, **re-register the agent as the service user** with the new
+passphrase (the `sudo -u <user> env HALO_HOME=... HALO_VAULT_PASSPHRASE=... halo
+agent add ...` line the installer prints). The ledger, caches, and audit chain
+are just files and copy fine; only the secret needs re-sealing.
+
+## Version note: 0.x → 1.x carries your data
+
+The jump from `0.2.x` to `1.3.x` is a **version-scheme change to align with the
+public release number, not a data-format break.** The on-disk layout is the same
+across it -- `ledger.redb`, `cache.redb`, `semantic_cache.redb`, `audit.jsonl`,
+`state.json`, `vkeys.json` -- so your ledger, cache, and audit log carry forward.
+
+Caveats:
+
+- The append-only stores (`audit.jsonl`, `state.json`, `vkeys.json`) carry over
+  unconditionally.
+- The `*.redb` databases carry over as long as the embedded-DB file format
+  matches across your specific old and new builds. If it ever doesn't, redb
+  **refuses to open** the file with a clear error rather than corrupting it -- so
+  the worst case is starting the ledger/cache fresh (both are regenerable; the
+  cache rebuilds itself and the ledger is history, not config). Copy `*.redb`
+  only while the process is **stopped**; they're live databases, not logs.
+- **Back the whole dir up before you upgrade** (`cp -a` it somewhere) so a
+  rollback is trivial regardless.
 
 ## Rolling back
 
@@ -109,5 +164,6 @@ HALO_VERSION=halo-v1.3.0 HALO_INSTALL_DIR=/usr/local/bin \
 sudo launchctl kickstart -k system/ai.aperion.halo
 ```
 
-Data is forward-compatible within a major version, so a rollback keeps your
-ledger, cache, and audit log intact.
+The 1.x on-disk layout is unchanged from 0.2.x (see the version note above), so a
+rollback keeps your ledger, cache, and audit log intact. If you took the backup
+above, you can also just restore it.
