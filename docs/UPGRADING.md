@@ -30,7 +30,7 @@ HALO_INSTALL_DIR=/usr/local/bin sudo -E sh -c 'curl -fsSL https://halo-get.aperi
 Pin a specific version instead of latest:
 
 ```bash
-HALO_VERSION=halo-v1.3.2 HALO_INSTALL_DIR=/usr/local/bin \
+HALO_VERSION=halo-v1.3.3 HALO_INSTALL_DIR=/usr/local/bin \
   sudo -E sh -c 'curl -fsSL https://halo-get.aperion.ai | sh'
 ```
 
@@ -43,7 +43,7 @@ Confirm it took:
 ### If you run the Docker image
 
 ```bash
-docker pull ghcr.io/aperionai/halo:latest      # or pin :1.3.2
+docker pull ghcr.io/aperionai/halo:latest      # or pin :1.3.3
 docker compose up -d halo                       # recreate the container
 ```
 

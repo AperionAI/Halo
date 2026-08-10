@@ -31,63 +31,64 @@ visibility -- and nothing errors to tell you.
 
 Register the agent in Halo first (see [`CLAW_BOX_SETUP.md`](./CLAW_BOX_SETUP.md)
 step 2 for the stdin-safe way, and [`HEADLESS.md`](./HEADLESS.md) for a box with
-no GUI session) so you have Halo's virtual key (`sf_live_claw_...`) and listen
+no GUI session) so you have Halo's virtual key (`sf_live_<agent>_...`) and listen
 address (`http://127.0.0.1:8787`). Then do all three of the following.
-
-> The JSON below mirrors the structure that worked in the field. Values and the
-> exact profile shape vary by OpenClaw version -- lift the canonical, verbatim
-> JSON from **§6 of the field runbook** and match your file's existing shape.
+**Back up `openclaw.json` and the auth-profiles file before touching either.**
 
 ### 1. Override the Anthropic provider in `openclaw.json`
 
 Patch OpenClaw's own config so the provider points at Halo instead of Anthropic.
-Two gotchas that will silently break this if you miss them:
+Override the **built-in `anthropic` provider ID** rather than creating a new
+one, so existing model references keep working.
 
-- The `models` array is **required** (each entry needs `id` and `name`) -- a
-  bare `baseUrl` override without it won't take.
-- `request.allowPrivateNetwork` must be `true`, or OpenClaw's SSRF guard blocks
-  the `127.0.0.1` base URL before the request leaves the gateway.
-
-```jsonc
+```bash
+openclaw config patch --stdin <<'EOF'
 {
   "models": {
     "providers": {
       "anthropic": {
-        "baseUrl": "http://127.0.0.1:8787",     // Halo's listen address
-        "models": [
-          { "id": "claude-sonnet-4", "name": "claude-sonnet-4" }
-          // ...list the model ids your agents actually request
-        ]
+        "baseUrl": "http://127.0.0.1:8787",
+        "apiKey": "sf_live_<agent>_xxxxxxxxxxxx",
+        "request": { "allowPrivateNetwork": true },
+        "models": [ { "id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5" } ]
       }
     }
-  },
-  "request": {
-    "allowPrivateNetwork": true                  // else the SSRF guard blocks 127.0.0.1
   }
 }
+EOF
+openclaw config validate
 ```
+
+Two gotchas inside that block that will silently break this if you miss them:
+
+- `models` is a **required array**, and `id`/`name` are required within it --
+  setting only `baseUrl` fails validation.
+- `request.allowPrivateNetwork: true` (nested under the `anthropic` provider,
+  not top-level) is mandatory, or OpenClaw's SSRF guard blocks the `127.0.0.1`
+  destination before the request leaves the gateway.
 
 ### 2. Write Halo's virtual key into the auth store
 
 OpenClaw keeps its Anthropic credential in:
 
 ```
-agents/<id>/agent/auth-profiles.json
+~/.openclaw/agents/<agent-id>/agent/auth-profiles.json
 ```
 
-The **auth store takes precedence over `models.providers.*.apiKey`.** So put
-Halo's virtual key into that profile (in place of the real provider key). Skip
-this and OpenClaw routes to Halo correctly but presents the *real* provider key,
-which Halo rejects -- and the run fails.
+The **auth store takes precedence over `models.providers.*.apiKey`.** So the
+`apiKey` you just patched into `openclaw.json` above is not enough by itself --
+put Halo's virtual key into the auth profile too. Skip this and OpenClaw routes
+to Halo correctly but presents the *real* provider key, which Halo rejects with
+`unrecognized or revoked Halo virtual key`.
 
-```jsonc
-// agents/<id>/agent/auth-profiles.json -- set the anthropic profile's key to
-// Halo's virtual key. Match your file's existing shape; see runbook §6.
-{
-  "anthropic": {
-    "apiKey": "sf_live_claw_xxxxxxxxxxxxxxxx"
-  }
-}
+```bash
+python3 -c '
+import json
+p = "/Users/<service-user>/.openclaw/agents/<agent-id>/agent/auth-profiles.json"
+d = json.load(open(p))
+d["profiles"]["anthropic:default"]["key"] = "sf_live_<agent>_xxxxxxxxxxxx"
+json.dump(d, open(p, "w"), indent=2)
+'
 ```
 
 > **Not via the CLI.** OpenClaw's `models auth paste-token` only accepts
@@ -107,24 +108,23 @@ not sufficient** -- a partial bypass can coexist with a rising count, so "the
 number went up" does not prove all traffic is going through Halo.
 
 The definitive check is `lsof` on the running gateway process during real agent
-traffic. Kick off an agent request, then, while it's working:
+traffic. Find the gateway's PID, kick off an agent request, then watch its
+connections while it's working:
 
 ```bash
-# find the gateway pid, then watch its established TCP connections
-sudo lsof -nP -iTCP -sTCP:ESTABLISHED | grep -Ei 'node|openclaw'
+sudo lsof -nP -i -a -p <runtime-pid> -r2 2>/dev/null | grep -E '8787|:443'
 ```
 
-- **Through Halo (good):** a connection to `127.0.0.1:8787`.
+(`-r2` repeats the listing every 2 seconds so you can watch it live across the
+request.)
 
-  ```
-  node  4982 openclaw  32u  TCP 127.0.0.1:xxxxx->127.0.0.1:8787 (ESTABLISHED)
-  ```
+- **Through Halo (good):** `->127.0.0.1:8787`.
+- **Bypassing Halo (bad):** `->x.x.x.x:443` during a model call, with no
+  `127.0.0.1:8787` at any point. That's the env-var-only failure mode above --
+  and it's what a partial/incorrect config patch also looks like.
 
-- **Bypassing Halo (bad):** a direct connection to the provider on `:443` (e.g.
-  `...->160.79.104.10:443`) and **no** `127.0.0.1:8787` at any point. That's the
-  env-var-only failure mode above.
-
-Run both checks. Only the `lsof` result proves you're actually in the loop.
+Run both checks. A rising request count without the `lsof` check is not proof --
+a partial configuration can route some paths through Halo and bypass others.
 
 ## After any OpenClaw upgrade or reconfigure
 
@@ -141,6 +141,8 @@ Put this on your OpenClaw upgrade checklist.
 ---
 
 *The config-patch recipe, the SSRF/`allowPrivateNetwork` and `models`-array
-gotchas, the auth-store precedence, and the two-check `lsof` verification all
-come from Craig's field install chronology and runbook (§6 config, §7
-verification). Lift exact JSON from there.*
+gotchas, the auth-store precedence, and the two-check `lsof` verification are
+lifted verbatim from Craig's field-verified operator runbook (§6 config, §7
+verification) -- status there is "verified end-to-end on macOS (Apple Silicon)
+against OpenClaw." The Linux equivalent is structurally the same but untested in
+the field; treat it as a starting point.*

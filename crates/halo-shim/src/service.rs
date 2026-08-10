@@ -193,6 +193,10 @@ mod macos {
         Ok(())
     }
 
+    /// `ThrottleInterval` of 10s is deliberate (field-verified): launchd's
+    /// default is fine for a healthy process, but if the wrapper or binary is
+    /// misconfigured and exits immediately, a low/absent throttle respawns it
+    /// in a tight loop that pins a CPU and floods the error log.
     fn write_plist(service_user: &str, _bin: &Path) -> Result<()> {
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -211,6 +215,8 @@ mod macos {
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
     <key>WorkingDirectory</key>
     <string>{HALO_HOME_DIR}</string>
     <key>StandardOutPath</key>

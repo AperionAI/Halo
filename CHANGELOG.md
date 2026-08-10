@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.3.3
+
+Craig sent his field-verified operator runbook after 1.3.2 shipped. It confirmed
+the 1.3.2 correction was pointed the right direction but got some exact values
+wrong (reconstructed from a description, not his verified copy), and it surfaced
+one real gap in the service installer itself.
+
+### Fixed
+
+- **`OPENCLAW_INTEGRATION.md` now has the exact, field-verified values,**
+  replacing the reconstructed ones from 1.3.2: `request.allowPrivateNetwork` is
+  nested under `models.providers.anthropic`, not top-level; the auth-profile
+  path/shape is `~/.openclaw/agents/<agent-id>/agent/auth-profiles.json` with
+  `profiles["anthropic:default"]["key"]`; the config patch is applied via
+  `openclaw config patch --stdin` + `openclaw config validate`; and the `lsof`
+  verification command is `lsof -nP -i -a -p <pid> -r2 | grep -E '8787|:443'`.
+- **`halo service install`'s generated LaunchDaemon now sets `ThrottleInterval`
+  to 10 seconds.** Without it, a misconfigured wrapper or binary that exits
+  immediately respawns in a tight loop, pinning a CPU and flooding the error
+  log. Field-verified as deliberate, not a launchd default to rely on.
+  `CLAW_BOX_SETUP.md`'s manual plist and systemd (`RestartSec`) examples
+  updated to match.
+
+### Added
+
+- **`CLAW_BOX_SETUP.md`: operations appendix** -- rotating the provider key,
+  rotating the vault passphrase, confirming reboot survival, and a FileVault
+  gotcha (a cold boot with FileVault + no auto-login stops at the pre-boot
+  unlock screen; use `sudo fdesetup authrestart` for planned remote reboots and
+  test the power-loss case deliberately).
+- **`CLAW_BOX_SETUP.md`: honest caching/savings expectations** -- exact-match
+  cache hit rates are low on real agent traffic, compression saves little on
+  structured JSON payloads (~0.005% measured on an 18k-token request), and
+  provider prompt-cache injection (not Halo's own cache) is where the real
+  savings come from for this workload. The budget cap and audit trail deliver
+  value regardless.
+- **`h()` shell helper** in troubleshooting docs -- wraps `halo` with the
+  service user/HOME/passphrase so `halo report` can't silently read the wrong,
+  empty data store by accident.
+- Launchd troubleshooting: exit code `78` (wrapper path wrong) and
+  immediately-exits (passphrase file unreadable by the service user), plus a
+  reminder to use a LaunchDaemon, never a LaunchAgent, for a service account.
+
 ## 1.3.2 (docs)
 
 Docs-only correction from a second field report. No binary change.

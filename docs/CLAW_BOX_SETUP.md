@@ -151,6 +151,30 @@ halo dashboard token
 - **A local audit trail** -- `halo report` / the dashboard, entirely on this
   machine, no data leaves it unless you later point it at a shared relay.
 
+## What to actually expect from caching (set expectations before a customer measures it)
+
+Set these honestly up front, before someone benchmarks it themselves and
+concludes something is broken:
+
+- **Exact-match cache** requires byte-identical request bodies. Real agent
+  traffic carries session context, conversation history, and timestamps, so
+  identical repeats are rare -- expect **low hit rates in production**. A high
+  hit rate in testing usually just means you sent the same request twice by
+  hand.
+- **Compression** targets verbose prose. Agent payloads are mostly structured
+  JSON (tool definitions, message history, fetched content), where there's
+  little to strip -- measured savings on a real ~18k-token agent request were
+  approximately **0.005%**. Don't lead with this number in a pitch.
+- **Provider prompt-cache injection is where the real savings come from** for
+  this workload. It writes the cache on the first request and pays off on
+  subsequent requests sharing the same prefix -- a large, stable system prompt
+  with repeated runs is the ideal case. **`$0.0000` savings on a first run is
+  expected, not a fault** -- measure across several runs before concluding
+  anything.
+- The **budget cap and the audit trail deliver value from request one**
+  regardless of any of the above -- don't let a slow-to-materialize cache story
+  overshadow that the kill switch and visibility are already working.
+
 ## If something looks wrong
 
 - **Claw gets connection-refused:** `halo serve` isn't running, or
@@ -158,7 +182,9 @@ halo dashboard token
   `127.0.0.1:8787`).
 - **Requests succeed but `halo report` shows nothing:** Claw is probably
   still using the raw Anthropic key/URL somewhere (check for a second config
-  location, e.g. a `.env` Claw itself reads that overrides what you set).
+  location, e.g. a `.env` Claw itself reads that overrides what you set). For
+  OpenClaw specifically, this is the expected symptom of the env-var method --
+  see [`OPENCLAW_INTEGRATION.md`](./OPENCLAW_INTEGRATION.md).
 - **Hit the hard cap unexpectedly:** `halo report` shows exactly which agent
   and which requests ate the budget -- raise `hard_cap_usd` in the config and
   restart `halo serve` if it was just set too low for real usage.
@@ -166,7 +192,15 @@ halo dashboard token
   certainly running `halo report` as a different user than `halo serve`, so it's
   reading a different (empty) `~/.halo`. The report now prints `Data dir:` at
   the top -- check it matches where the proxy writes. On a service install both
-  are pinned to `/usr/local/var/halo`.
+  are pinned to `/usr/local/var/halo`. To make this impossible to get wrong by
+  accident, wrap it once in your shell:
+
+  ```bash
+  h() { sudo -u openclaw env HALO_HOME=/usr/local/var/halo \
+    HALO_VAULT_PASSPHRASE="$(sudo cat /usr/local/etc/halo/vault-passphrase)" \
+    halo "$@"; }
+  # then always: h report   /   h status   /   h kill
+  ```
 
 ---
 
@@ -193,7 +227,10 @@ This generates everything a headless install needs and loads it:
   user, or the service under launchd, always reads the same store).
 - `/usr/local/var/log/halo/halo.log` + `halo.err.log` -- service logs.
 - `/Library/LaunchDaemons/ai.aperion.halo.plist` -- the LaunchDaemon
-  (`RunAtLoad` + `KeepAlive`, runs as `--user`).
+  (`RunAtLoad` + `KeepAlive`, `ThrottleInterval` 10s, runs as `--user`). The
+  10s throttle is deliberate, not a default -- at 1s (or unset), a misconfigured
+  wrapper or binary that exits immediately respawns in a tight loop that pins a
+  CPU and floods the error log.
 
 Then register your agent as that same service user, with the same passphrase and
 data dir, so the sealed key is the one the service can read:
@@ -213,6 +250,15 @@ passphrase in place so nothing is silently destroyed).
 If you'd rather not use the subcommand, the plist above is a plain LaunchDaemon
 and the wrapper is a three-line shell script -- copy them by hand from the paths
 listed and `sudo launchctl bootstrap system <plist>`.
+
+Confirm it survived the load: `sudo launchctl list | grep aperion` should show a
+PID and exit code `0`. A dash with exit code `78` means the wrapper script path
+in the plist is wrong or the wrapper isn't executable (`chmod 755`). A daemon
+that starts and then immediately exits usually means the passphrase file isn't
+readable by the service user -- `chown` it to that user.
+
+**Use a LaunchDaemon (`system/...`), not a LaunchAgent.** LaunchAgents require an
+active GUI session and can't be loaded over SSH for a service account.
 
 ### Linux (systemd template)
 
@@ -235,7 +281,9 @@ Environment=HALO_HOME=/var/lib/halo
 EnvironmentFile=/etc/halo/vault.env
 ExecStart=/usr/local/bin/halo serve
 Restart=always
-RestartSec=2
+# 10s, not 1-2s: a misconfigured unit that exits immediately should not
+# respawn in a tight loop (mirrors the launchd ThrottleInterval above).
+RestartSec=10
 # Least privilege: Halo only needs its own data dir.
 ReadWritePaths=/var/lib/halo
 
@@ -247,3 +295,59 @@ Create the data dir and passphrase file first (`sudo mkdir -p /var/lib/halo &&
 sudo chown openclaw /var/lib/halo`; see [`HEADLESS.md`](./HEADLESS.md) for the
 passphrase), and register the agent as `openclaw` with the same `HALO_HOME` and
 passphrase, exactly as in the macOS steps above.
+
+## Appendix: operations (rotation, reboot, FileVault)
+
+### Change budget caps
+
+Edit `~/.halo/config.yaml` (or `/usr/local/var/halo/config.yaml` on a service
+install), then restart so the change takes effect:
+`sudo launchctl kickstart -k system/ai.aperion.halo`.
+
+### Rotate the provider key
+
+1. Mint a new key with your provider.
+2. Re-register: `halo agent add <name> --provider anthropic` (same agent name,
+   same service user / passphrase) -- this mints a **new virtual key**.
+3. Update the new virtual key everywhere your runtime references it (for
+   OpenClaw, that's both places in
+   [`OPENCLAW_INTEGRATION.md`](./OPENCLAW_INTEGRATION.md) -- the config patch
+   *and* the auth profile).
+4. Restart the runtime, verify with the two-check method (`halo report` +
+   `lsof`, see `OPENCLAW_INTEGRATION.md` §Verifying).
+5. Revoke the old provider key with the provider.
+
+### Rotate the vault passphrase
+
+Rotate immediately if the passphrase has ever appeared in a terminal, a chat
+log, or a support ticket.
+
+```bash
+sudo bash -c 'umask 077; openssl rand -base64 32 | tr -d "\n" > /usr/local/etc/halo/vault-passphrase.new'
+sudo chown <service-user> /usr/local/etc/halo/vault-passphrase.new
+```
+
+Re-register the agent using the *new* passphrase file (this re-seals the key
+under the new passphrase and mints a new virtual key -- update your runtime with
+it), then swap the file in and restart:
+
+```bash
+sudo mv /usr/local/etc/halo/vault-passphrase.new /usr/local/etc/halo/vault-passphrase
+sudo chmod 600 /usr/local/etc/halo/vault-passphrase
+sudo launchctl kickstart -k system/ai.aperion.halo
+```
+
+### Reboot survival
+
+After any change to the service config, reboot and confirm both Halo and the
+agent runtime came back on their own: `sudo launchctl list | grep -E
+'aperion|<your-runtime>'` -- both should show a PID and exit code `0`.
+
+**FileVault gotcha (macOS):** with FileVault enabled and no auto-login, a cold
+boot stops at the pre-boot unlock screen and *nothing* starts until someone
+authenticates at the console -- a graceful `sudo reboot` may retain the unlock
+key, but a power loss will not. For planned remote reboots use `sudo fdesetup
+authrestart`, which stashes a one-time unlock key so the box comes back without
+anyone at the console. **Test the power-loss case deliberately** before relying
+on unattended recovery -- a remotely-administered box that silently stops
+recovering from a hard power cycle is worse than no automation at all.
