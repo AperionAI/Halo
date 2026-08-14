@@ -4,10 +4,11 @@ A lightweight, standalone governance proxy for **self-hosted AI agents**. Halo
 sits between your agent runtime and the model providers (and your MCP servers),
 so you can:
 
-- **See the bill** — per-agent, per-model, per-task spend and a real COGS/savings number,
-  split into what came from Halo's own cache vs. a baseline that holds even
-  when that cache never hits (see "Compression & provider prompt-cache" below).
-- **Cut the obvious waste** — exact-match response cache + prompt compression.
+- **See the bill** — per-agent, per-model, per-task spend. Free stars what Cut
+  would have saved on this install's traffic. Cut applies cache and compression
+  so the savings number is money that didn't leave.
+- **Cut the obvious waste** — exact-match response cache + prompt compression
+  (Cut). Free meters the same traffic so the upgrade CTA is in your dollars.
 - **Never get a runaway invoice** — local token/spend budgets with a hard-cap
   kill switch that works even fully offline. A fresh install arms $25 soft /
   $50 hard per 24h so you don't have to hunt YAML first.
@@ -17,9 +18,9 @@ so you can:
   metadata-only savings dashboard.
 
 With `relay_url` unset (the default), **nothing leaves the machine** except the
-provider calls you already make. Budgets, cache, the denylist, `halo report`,
-and the loopback dashboard all work offline. The hosted relay is optional and
-not part of Free.
+provider calls you already make. Budgets, the denylist, `halo report`, and the
+loopback dashboard all work offline. Cache and compression apply on Cut. The
+hosted relay is optional and not part of Free.
 
 It is deliberately **light**: its own Rust workspace, a lean dependency tree,
 `redb`/SQLite single-file stores (no Redis, no Mongo, no Postgres), and **no
@@ -184,10 +185,12 @@ internally and, at the seam, reuses Shield's:
 - **taint** — credential-shape detection flags raw secrets heading to a tool or
   echoed back by one, recorded (kinds only) in the audit log.
 
-### Compression & provider prompt-cache (on by default)
+### Compression & provider prompt-cache (Cut)
 
-Every request gets two savings mechanisms that apply whether or not Halo's
-own cache ever hits — the floor a deployment gets even at a 0% cache-hit rate:
+Cut applies two savings mechanisms that hold whether or not Halo's own cache
+ever hits — the floor a deployment gets even at a 0% cache-hit rate. Free
+still computes the ratio and stars the dollars; it does not rewrite the
+outbound body or inject `cache_control`.
 
 - **Compression that survives to the wire.** Verbose-phrase reduction (`"In
   order to"` -> `"To"`, ported from the main Smartflow proxy's phrase table)
@@ -215,6 +218,7 @@ misleadingly unimpressive — see `docs/DESIGN_REVIEW.md` for the accounting.
 ### Semantic cache (cross-provider, off by default)
 
 Exact-match caching only catches byte-identical requests. The semantic cache
+(Cut; off until you opt in) asks an embeddings API whether a *similar* prompt
 catches the much larger set of *reworded* repeats — a question asked twice in
 different words, possibly even routed through different agents/providers —
 without running any model locally:
@@ -254,12 +258,12 @@ How it stays safe and cheap rather than a source of wrong or stale answers:
 - **Off by default.** Unlike exact-match caching, this makes a real API call
   (unless `provider: mock`/`ollama`) on every miss, so it's opt-in.
 
-On the free tier `max_entries` is capped (a paid license with
-`semantic_cache_unlimited` lifts it); the cache still works either way.
+Semantic cache serve is Cut. A Cut/Route key without
+`semantic_cache_unlimited` still has an entry ceiling.
 
 ### The relay (optional, not Free)
 
-Leave `relay_url` unset and nothing is uploaded. Budgets, cache, `halo report`,
+Leave `relay_url` unset and nothing is uploaded. Budgets, `halo report`,
 and the loopback dashboard at `http://127.0.0.1:8788` cover the local box.
 
 If you later want a hosted multi-device view:
@@ -353,30 +357,38 @@ token needed, works fully offline.
 ## Tiers & licensing
 
 Halo follows an OSS-core model. **The free tier's safety net is unconditional
-forever** — budgets + kill switch, exact-match cache, compression, prompt-cache
-injection, MCP cloak/taint, local audit log, and `halo report` are all fully
-functional, uncapped, and never gated. Nothing that keeps a self-hoster safe
-from a runaway bill is ever paywalled.
+forever** — budgets + kill switch, denylist, MCP cloak/taint, local audit log,
+and `halo report` are fully functional and never gated. Nothing that keeps a
+self-hoster safe from a runaway bill is ever paywalled.
+
+Cut ($50) is named Cut because it cuts the bill: exact-match cache,
+compression, Anthropic `cache_control` injection, semantic cache (opt-in),
+per-agent caps, alerting, 30-day history, unlimited agents. Free still
+writes the exact-match cache so it can star what Cut would have saved.
+
+Route ($100) is Cut plus failover: `failover:` in `config.yaml` maps an
+agent to a backup agent; on transport error or 502/503/504/529 Halo retries
+once with the backup provider/key.
 
 Two things scale with a **paid license** (an offline, Ed25519-signed key — no
 phone-home, verified against a public key baked into the binary): how big
 Halo can get on *this one machine*, and hosted/multi-seat conveniences once
 you're running more than one:
 
-| Feature | Free | Paid |
-|---|---|---|
-| Local budgets, hard-cap kill switch, `halo kill` | yes | yes |
-| Exact-match cache, compression, prompt-cache injection | yes | yes |
-| MCP cloak/taint, local audit log, `halo report` | yes | yes |
-| Egress denylist + allowlist, at-rest encryption | yes | yes |
-| Local history window | 7 days | Cut 30 / Route 90 |
-| Registered agents (`halo agent add`) | 3 | unlimited |
-| Semantic cache | capped entries | raised cap |
-| Budget alerting webhooks | — | yes |
-| Best-effort remote kill (pull from relay) | — | yes |
+| Feature | Free | Cut $50 | Route $100 |
+|---|---|---|---|
+| Local budgets, hard-cap kill switch, `halo kill` | yes | yes | yes |
+| Egress denylist + allowlist, MCP cloak/taint, audit | yes | yes | yes |
+| Exact-match cache, compression, prompt-cache injection | meters / stars | applies | applies |
+| Local history window | 7 days | 30 days | 90 days |
+| Registered agents (`halo agent add`) | 3 | unlimited | unlimited |
+| Semantic cache | — | opt-in | opt-in |
+| Per-agent caps, budget alerting webhooks | — | yes | yes |
+| Failover (`failover:` agent → backup) | — | — | yes |
+| Best-effort remote kill (pull from relay) | — | — | — |
 
-The 3-agent cap is the one non-fleet reason to upgrade besides history.
-Hitting it doesn't break anything already running: `halo agent add` just
+The 3-agent cap is the other non-fleet reason to upgrade besides history and
+the bill cut. Hitting it doesn't break anything already running: `halo agent add` just
 refuses to mint a 4th virtual key until you revoke one or license up.
 
 Paid is Cut ($50) or Route ($100). Govern ($250) is not for sale yet.

@@ -442,7 +442,8 @@ fn license_cmd(paths: Paths, action: LicenseCmd) -> Result<()> {
             if matches!(ent.ladder(), halo_common::Ladder::Free) {
                 println!(
                     "\nFree is the firewall (caps, kill switch, denylist, 7-day history).\n\
-                     Cache and compression stay on so the savings number is real.\n\
+                     Cache, compression, and prompt-cache injection are Cut — that's the bill cut.\n\
+                     The dashboard stars what Cut would have saved on this install's traffic.\n\
                      Cut ($50/mo):  https://deploy.langsmart.app/halo/buy/cut\n\
                      Route ($100/mo): https://deploy.langsmart.app/halo/buy/route\n\
                      After checkout: `halo license apply` (paste the token), then `halo license show`."
@@ -968,6 +969,11 @@ async fn serve(paths: Paths) -> Result<()> {
         paths.base.join("telemetry.jsonl"),
         cfg.egress.clone(),
     );
+    match telem.prune_older_than_hours(entitlements.max_history_hours()) {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(dropped = n, "pruned telemetry.jsonl to the tier history window"),
+        Err(e) => tracing::warn!("telemetry.jsonl prune failed: {e}"),
+    }
 
     let mcp = if cfg.mcp_servers.is_empty() {
         None

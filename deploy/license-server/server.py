@@ -366,7 +366,7 @@ def render_page(title: str, body: str) -> str:
         "<a href=\"https://deploy.langsmart.app/halo/buy/cut\">Buy Cut</a>"
         "<a href=\"https://deploy.langsmart.app/halo/buy/route\">Buy Route</a>"
         "</nav>"
-        "<span class=\"badge-version\">1.5.1</span>"
+        "<span class=\"badge-version\">1.6.0</span>"
         "</header>\n"
         f"<main>{body}</main>\n"
         "</body></html>\n"
@@ -376,11 +376,11 @@ def render_page(title: str, body: str) -> str:
 BUY_COPY = {
     "cut": {
         "price": "$50/mo",
-        "blurb": "30-day history, alerting webhooks, and more than three agents. The local firewall (caps, kill switch, denylist) stays on Free.",
+        "blurb": "Cache, compression, and prompt-cache injection — that's the bill cut. 30-day history, alerting, more than three agents. Caps, kill switch, and denylist stay on Free.",
     },
     "route": {
         "price": "$100/mo",
-        "blurb": "90-day history plus routing. Same checkout as Cut; Stripe handles the card.",
+        "blurb": "Everything in Cut, plus failover to a backup agent on 5xx or transport error. 90-day history. Task-class routing is not in this binary yet.",
     },
 }
 

@@ -99,8 +99,10 @@ struct UpgradeJson {
     to: String,
     price_usd: f64,
     saved_usd: f64,
+    spent_usd: f64,
     would_have_usd: f64,
     history_days: u64,
+    hypothetical: bool,
 }
 
 #[derive(Serialize)]
@@ -127,6 +129,7 @@ struct RollupJson {
     savings: f64,
     baseline_savings: f64,
     hit_savings: f64,
+    shadow_savings: f64,
 }
 
 #[derive(Serialize)]
@@ -145,6 +148,7 @@ fn to_json(r: &report::AgentRollup) -> RollupJson {
         savings: r.savings(),
         baseline_savings: r.baseline_savings(),
         hit_savings: r.hit_savings(),
+        shadow_savings: r.cut_would_save(),
     }
 }
 
@@ -168,9 +172,11 @@ async fn summary(
         Some(UpgradeJson {
             to: "cut".into(),
             price_usd: 50.0,
-            saved_usd: rep.total.savings(),
+            saved_usd: rep.total.cut_would_save(),
+            spent_usd: rep.total.actual_cost,
             would_have_usd: rep.total.counterfactual_cost,
             history_days: 30,
+            hypothetical: true,
         })
     } else {
         None
@@ -482,7 +488,7 @@ const HTML: &str = r#"<!doctype html>
       · <a href="https://deploy.langsmart.app/halo/buy/route">Buy Route — $100/mo</a></p>
   </div>
   <div class="cards">
-    <div class="card savings"><div class="label">Estimated saved</div><div class="value" id="saved">—</div></div>
+    <div class="card savings"><div class="label" id="savedLabel">Estimated saved</div><div class="value" id="saved">—</div></div>
     <div class="card"><div class="label">Actual spend</div><div class="value money" id="spend">—</div></div>
     <div class="card"><div class="label">Requests</div><div class="value" id="reqs">—</div></div>
     <div class="card"><div class="label">Remaining budget</div><div class="value" id="remain">—</div></div>
@@ -536,7 +542,15 @@ async function load() {
   const r = await fetch('/api/summary?hours=' + hours);
   const d = await r.json();
   const t = d.total || {};
-  document.getElementById('saved').textContent = usd(t.savings);
+  const up = d.upgrade;
+  const savedLabel = document.getElementById('savedLabel');
+  if (up && up.hypothetical) {
+    savedLabel.textContent = 'Cut would have saved*';
+    document.getElementById('saved').textContent = usd(up.saved_usd) + '*';
+  } else {
+    savedLabel.textContent = 'Estimated saved';
+    document.getElementById('saved').textContent = usd(t.savings);
+  }
   document.getElementById('spend').textContent = usd(t.actual_cost);
   document.getElementById('reqs').textContent = (t.requests||0).toLocaleString();
   const capH = d.max_history_hours || 168;
@@ -550,14 +564,14 @@ async function load() {
   const cur = win.value;
   win.innerHTML = wanted.map(([h,l]) => `<option value="${h}">${l}</option>`).join('');
   win.value = wanted.some(([h]) => String(h) === cur) ? cur : String(wanted[0][0]);
-  const up = d.upgrade;
   const card = document.getElementById('upgradeCard');
   if (up) {
     card.style.display = 'block';
     document.getElementById('upgradeLine').textContent =
-      'Would have cost ' + usd(up.would_have_usd) + ' · Halo saved ' + usd(up.saved_usd);
+      'You spent ' + usd(up.spent_usd) + '. Cut would have saved ' + usd(up.saved_usd) + '*';
     document.getElementById('upgradeHint').textContent =
-      'Cut is $' + up.price_usd + '/mo and unlocks ' + up.history_days +
+      '* cache, compression, and prompt-cache injection are Cut. Free meters them. Cut is $' +
+      up.price_usd + '/mo and unlocks ' + up.history_days +
       '-day history. After checkout: halo license apply (paste the token), then halo license show.';
   } else {
     card.style.display = 'none';

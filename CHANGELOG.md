@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.6.0
+
+Cut now cuts the bill. Cache, compression, and prompt-cache injection are
+paid. Free still meters them and stars what you would have saved. Route
+retries once on a dead upstream. MCP taint blocks before the tool runs.
+
+No production users yet, so the gate is on now rather than later.
+
+### Changed
+
+- **Free** writes exact-match cache (so repeats can be scored) but does not
+  serve hits, does not rewrite the outbound body, and does not inject
+  Anthropic `cache_control`. Each event records `shadow_savings_usd`.
+- **Dashboard / `halo report` / `halo license show`.** Free shows
+  "You spent $X. Cut would have saved $Y*" instead of pretending cache
+  already ran.
+- **Per-agent caps and semantic cache serve** are Cut. Global $25/$50
+  caps, kill switch, and denylist stay Free.
+
+### Added
+
+- **Route failover.** `failover:` in `config.yaml` maps agent id to a
+  backup agent. On transport error or 502/503/504/529, one retry with the
+  backup provider/key. No recursive hops.
+- **MCP taint block** (default on). Uncloaked secret shapes in tool
+  arguments refuse the call before it is forwarded. `mcp_block_uncloaked_secrets: false` to log-only.
+- **`telemetry.jsonl` prune** at `halo serve` start to the tier history
+  window. `audit.jsonl` is not touched.
+
 ## 1.5.1
 
 Production signing key. Paid licenses now verify in stock Halo with no

@@ -6,6 +6,7 @@
 //! keychain (see `keys.rs`).
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Default loopback ingress address.
@@ -33,9 +34,8 @@ pub struct Config {
     /// Offline license key unlocking paid-tier features. Either the raw signed
     /// token itself, or a path to a file containing it. Absent / invalid /
     /// expired always resolves to the free tier -- it never blocks startup.
-    /// The free tier (budgets, kill switch, exact cache, compression,
-    /// prompt-cache injection, MCP cloak/taint, local audit + report) is fully
-    /// functional forever without any key.
+    /// Free is the firewall (caps, kill switch, denylist, meter, 7-day
+    /// history). Cache, compression, and prompt-cache injection are Cut.
     #[serde(default)]
     pub license_key: Option<String>,
 
@@ -65,6 +65,19 @@ pub struct Config {
     /// pointed at Halo; Halo holds these real server definitions.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+
+    /// Refuse an MCP tool call *before* it is forwarded if the arguments
+    /// contain uncloaked secret shapes (API keys, tokens). Default on. The
+    /// audit log still records the kinds. Cloaked `{{cloak:NAME}}` placeholders
+    /// are resolved after this check and are not a block.
+    #[serde(default = "default_true")]
+    pub mcp_block_uncloaked_secrets: bool,
+
+    /// Route-tier failover: agent id -> backup agent id. On transport error
+    /// or 502/503/504/529, Halo retries once with the backup agent's
+    /// provider/key. Ignored on Free/Cut. No recursive hops.
+    #[serde(default)]
+    pub failover: BTreeMap<String, String>,
 
     /// Per-model price overrides. The built-in table is a small, hand-maintained
     /// approximation (unlike LiteLLM's continuously-updated price file) and its
@@ -117,6 +130,8 @@ impl Default for Config {
             semantic_cache: SemanticCacheConfig::default(),
             compression: CompressionConfig::default(),
             mcp_servers: Vec::new(),
+            mcp_block_uncloaked_secrets: true,
+            failover: BTreeMap::new(),
             price_overrides: Vec::new(),
             dashboard: DashboardConfig::default(),
             egress: EgressConfig::default(),
@@ -607,6 +622,13 @@ mod tests {
             allowed_upstreams: rules.iter().map(|s| s.to_string()).collect(),
             denied_upstreams: Vec::new(),
         }
+    }
+
+    #[test]
+    fn mcp_block_defaults_on_and_failover_empty() {
+        let cfg: Config = serde_yaml::from_str("listen: 127.0.0.1:8787\n").unwrap();
+        assert!(cfg.mcp_block_uncloaked_secrets);
+        assert!(cfg.failover.is_empty());
     }
 
     #[test]

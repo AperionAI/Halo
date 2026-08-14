@@ -43,6 +43,7 @@ returned to your agent (never on the hot path).
 | `policy_decision` | enum | `allow` \| `cache_hit` \| `semantic_cache_hit` \| `budget_blocked` \| `soft_cap_warn` \| `policy_blocked`. |
 | `compression_ratio` | number | chars-after / chars-before over compressed text (`1.0` = unchanged). |
 | `error_class` | string | Error class if the call failed (`timeout`, `transport`, `http_429`, …), else empty. |
+| `shadow_savings_usd` | number | Free-tier only: dollars Cut would have saved on this call (exact-cache hit not served, compression not applied). Zero on Cut/Route. Default `0` if absent. |
 
 ## Batch envelope
 
@@ -53,7 +54,9 @@ returned to your agent (never on the hot path).
 Uploaded to `POST <relay_url>/v1/telemetry` with a bearer token issued at
 device registration. Failures spool to `~/.halo/spool/` and replay on
 reconnect. The durable local log at `~/.halo/telemetry.jsonl` is the source of
-truth for `halo report` and is never cleared by upload.
+truth for `halo report`. Upload never clears it. `halo serve` prunes it to the
+tier history window (Free 7d / Cut 30d / Route 90d). `audit.jsonl` is a hash
+chain and is never pruned.
 
 ## Savings math (canonical, server-side)
 

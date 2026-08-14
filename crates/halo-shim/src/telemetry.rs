@@ -1,9 +1,11 @@
 //! Telemetry: append-only local log + batched, retryable upload to the relay.
 //!
 //! Two stores with distinct jobs:
-//!   * `telemetry.jsonl` (local log) -- append-only, NEVER cleared by upload.
-//!     This is what `halo report` reads, so COGS/savings work fully offline
-//!     even if the relay was never reachable.
+//!   * `telemetry.jsonl` (local log) -- append-only on the hot path, NEVER
+//!     cleared by upload. Pruned at `halo serve` start to the tier history
+//!     window (Free 7d / Cut 30d / Route 90d). This is what `halo report`
+//!     reads, so COGS/savings work fully offline even if the relay was never
+//!     reachable. `audit.jsonl` is a hash chain and is never pruned here.
 //!   * `spool/` (retry queue) -- batches that failed to upload, replayed on
 //!     reconnect and deleted on success.
 //!
@@ -198,5 +200,88 @@ impl Telemetry {
             .filter(|l| !l.trim().is_empty())
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect()
+    }
+
+    /// Drop events older than `hours` from `telemetry.jsonl`. Does not touch
+    /// `audit.jsonl`. Returns how many lines were dropped. No-op if the file
+    /// is missing or nothing is stale.
+    pub fn prune_older_than_hours(&self, hours: u64) -> Result<u64> {
+        let cutoff = chrono::Utc::now().timestamp() - (hours as i64).saturating_mul(3600);
+        let raw = match std::fs::read_to_string(&self.inner.log_path) {
+            Ok(r) => r,
+            Err(_) => return Ok(0),
+        };
+        let mut kept = Vec::new();
+        let mut dropped = 0u64;
+        for line in raw.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<TelemetryEvent>(line) {
+                Ok(e) if e.timestamp.timestamp() < cutoff => dropped += 1,
+                _ => kept.push(line),
+            }
+        }
+        if dropped == 0 {
+            return Ok(0);
+        }
+        let mut body = kept.join("\n");
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        crate::util::atomic_write_0600(&self.inner.log_path, body.as_bytes())?;
+        Ok(dropped)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use halo_common::telemetry::{PolicyDecision, Provider};
+
+    fn ev(hours_ago: i64) -> TelemetryEvent {
+        TelemetryEvent {
+            device_id: "d".into(),
+            agent_id: "a".into(),
+            subject: None,
+            timestamp: chrono::Utc::now() - chrono::Duration::hours(hours_ago),
+            provider: Provider::Openai,
+            model: "gpt-4o".into(),
+            tokens_in: 1,
+            tokens_out: 1,
+            tokens_cached: 0,
+            cache_hit: false,
+            task_class: "chat".into(),
+            latency_ms: 1,
+            estimated_cost: 0.01,
+            counterfactual_cost: 0.01,
+            policy_decision: PolicyDecision::Allow,
+            compression_ratio: 1.0,
+            error_class: String::new(),
+            shadow_savings_usd: 0.0,
+        }
+    }
+
+    #[test]
+    fn prune_drops_stale_keeps_recent() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("telemetry.jsonl");
+        let t = Telemetry::new(
+            "d".into(),
+            None,
+            None,
+            dir.path().join("spool"),
+            log.clone(),
+        );
+        let lines = [ev(48), ev(1)]
+            .into_iter()
+            .map(|e| serde_json::to_string(&e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(&log, lines).unwrap();
+        let dropped = t.prune_older_than_hours(24).unwrap();
+        assert_eq!(dropped, 1);
+        assert_eq!(t.local_events().len(), 1);
     }
 }

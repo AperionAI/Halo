@@ -9,8 +9,10 @@
 //! The cardinal rule (enforced by [`Entitlements::from_license_key`]): a
 //! missing, malformed, wrong-key, or expired license degrades to the **free
 //! tier**. It NEVER prevents the proxy from starting or serving. Nothing that
-//! keeps a solo self-hoster safe from a runaway bill is ever gated -- only the
-//! hosted/multi-seat conveniences are.
+//! keeps a solo self-hoster safe from a runaway bill is ever gated (caps,
+//! kill switch, denylist). Cache, compression, and prompt-cache injection
+//! are Cut -- that's the bill cut. Free still meters them as a starred
+//! "would have saved" figure.
 //!
 //! Wire shape (base64url of a compact JSON envelope, so a license key is a
 //! single paste-friendly token):
@@ -24,17 +26,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-/// Free-tier ceiling on the semantic cache's stored-entry count. The semantic
-/// cache still works on the free tier (it's a safety/savings feature), but its
-/// footprint is capped here unless a license unlocks
-/// [`feature::SEMANTIC_CACHE_UNLIMITED`]. Chosen small enough to be useful for
-/// a solo self-hoster's hot prompts without becoming a large hosted-scale
-/// working set.
+/// Free-tier ceiling on the semantic cache's stored-entry count. Semantic
+/// cache *serve* is Cut (with exact cache and compression). This ceiling
+/// still applies to a paid key that doesn't include
+/// [`feature::SEMANTIC_CACHE_UNLIMITED`].
 pub const FREE_SEMANTIC_CACHE_MAX_ENTRIES: u64 = 200;
 
 /// Free-tier ceiling on the number of *active* registered agents (`halo agent
 /// add`) on a single install. Deliberately a scale/convenience cap, not a
-/// safety one: budgets, the kill switch, caching, and compression are never
+/// safety one: budgets, the kill switch, and the denylist are never
 /// capped, and 3 is enough to fully evaluate Halo (e.g. one agent per
 /// provider plus a fast/cheap one). This is the main non-fleet reason to
 /// license Halo -- a solo power user who outgrows 3 agents on one machine
@@ -71,11 +71,10 @@ pub mod feature {
     /// solo self-hoster scaling up on a single machine, not just a team.
     pub const MULTI_AGENT_UNLIMITED: &str = "multi_agent_unlimited";
 
-    /// Paid Cut tier ($50): 30-day history and the savings stack. Also implied
-    /// by any legacy paid license that doesn't name a ladder feature.
+    /// Paid Cut tier ($50): cache, compression, prompt-cache injection.
+    /// That's the bill cut. Also 30-day history and more than 3 agents.
     pub const CUT: &str = "cut";
-    /// Paid Route tier ($100): 90-day exportable history. Routing itself is a
-    /// later R3 slice.
+    /// Paid Route tier ($100): failover and (later) task routing on top of Cut.
     pub const ROUTE: &str = "route";
     /// Paid Govern tier ($250). Gated on the relay; the flag exists so a
     /// minted key can name it without an older binary failing to parse.
@@ -250,12 +249,14 @@ impl Entitlements {
         match tier.trim().to_ascii_lowercase().as_str() {
             "cut" => vec![
                 feature::CUT.to_string(),
+                feature::ALERTING.to_string(),
                 feature::SEMANTIC_CACHE_UNLIMITED.to_string(),
                 feature::MULTI_AGENT_UNLIMITED.to_string(),
             ],
             "route" => vec![
                 feature::CUT.to_string(),
                 feature::ROUTE.to_string(),
+                feature::ALERTING.to_string(),
                 feature::SEMANTIC_CACHE_UNLIMITED.to_string(),
                 feature::MULTI_AGENT_UNLIMITED.to_string(),
             ],

@@ -66,7 +66,9 @@ impl AppState {
     /// Fire a budget alert webhook if (and only if) the `alerting` feature is
     /// entitled and a webhook is configured. Fire-and-forget; never blocks.
     pub fn maybe_alert_budget(&self, agent: &str, verdict: &crate::budget::BudgetVerdict) {
-        if !self.entitlements.has(halo_common::license::feature::ALERTING) {
+        if !self.entitlements.has(halo_common::license::feature::CUT)
+            && !self.entitlements.has(halo_common::license::feature::ALERTING)
+        {
             return;
         }
         crate::alert::fire_budget_alert(
@@ -158,6 +160,7 @@ impl AppState {
             policy_decision: o.decision,
             compression_ratio: o.compression_ratio,
             error_class: o.error_class.clone(),
+            shadow_savings_usd: o.shadow_savings_usd,
         })
         .await;
 
@@ -198,4 +201,6 @@ pub struct LlmOutcome {
     /// Used only for `PolicyDecision::SemanticCacheHit`: the real cost of the
     /// embedding-lookup call, decoupled from the served model's token price.
     pub actual_cost_override: Option<f64>,
+    /// Free-tier shadow savings for this call. Zero when Cut is entitled.
+    pub shadow_savings_usd: f64,
 }

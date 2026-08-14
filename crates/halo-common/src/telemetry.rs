@@ -119,6 +119,11 @@ pub struct TelemetryEvent {
     /// Provider/transport error class if the call failed (e.g. "timeout",
     /// "http_429"), else empty.
     pub error_class: String,
+    /// Free-tier only: dollars Cut would have saved on this call (exact-cache
+    /// hit not served, compression not applied). Zero on Cut/Route because
+    /// those savings already landed in `estimated_cost` vs `counterfactual_cost`.
+    #[serde(default)]
+    pub shadow_savings_usd: f64,
 }
 
 /// A batch of events uploaded to the relay in one request.

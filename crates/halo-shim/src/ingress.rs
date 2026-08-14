@@ -180,6 +180,77 @@ fn provider_base(provider: Provider, override_url: Option<&str>) -> String {
     }
 }
 
+fn failover_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 502 | 503 | 504 | 529)
+}
+
+struct BackupHop {
+    agent_id: String,
+    provider: Provider,
+    key: String,
+    url: String,
+}
+
+/// Route-tier: one backup agent, no recursive hops. None on Free/Cut or
+/// when the map/key/egress check fails.
+fn route_backup(st: &AppState, agent: &str, kind: ApiKind) -> Option<BackupHop> {
+    if !st.entitlements.has(halo_common::license::feature::ROUTE) {
+        return None;
+    }
+    let backup_id = st.cfg.failover.get(agent)?;
+    if backup_id.is_empty() || backup_id == agent {
+        return None;
+    }
+    let rec = st
+        .keys
+        .records()
+        .ok()?
+        .into_iter()
+        .find(|r| r.agent_id == *backup_id && r.is_active())?;
+    let key = st.keys.get_secret(&rec.agent_id).ok()?;
+    let url = format!(
+        "{}{}",
+        provider_base(rec.provider, rec.base_url.as_deref()),
+        kind.upstream_path()
+    );
+    if crate::egress::check_egress(&st.cfg.egress, &url).is_err() {
+        return None;
+    }
+    Some(BackupHop {
+        agent_id: rec.agent_id,
+        provider: rec.provider,
+        key,
+        url,
+    })
+}
+
+async fn send_upstream(
+    st: &AppState,
+    headers: &HeaderMap,
+    provider: Provider,
+    real_key: &str,
+    url: &str,
+    outbound: &str,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let mut req = st
+        .http
+        .post(url)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(outbound.to_string());
+    req = match provider {
+        Provider::Anthropic => {
+            let ver = headers
+                .get("anthropic-version")
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or("2023-06-01");
+            req.header("x-api-key", real_key)
+                .header("anthropic-version", ver)
+        }
+        _ => req.header(header::AUTHORIZATION, format!("Bearer {real_key}")),
+    };
+    req.send().await
+}
+
 async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKind) -> Response {
     // 1. Virtual-key auth.
     let vkey = match extract_vkey(&headers) {
@@ -206,7 +277,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             "agent remotely revoked (killed from the relay)",
         );
     }
-    let provider = record.provider;
+    let mut provider = record.provider;
     let provider_str = provider.as_str();
     // Optional sub-identity hint (channel/sub-agent/thread) for cost
     // attribution when one process/key fans out across many channels.
@@ -223,8 +294,11 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             .map(streaming::wants_stream)
             .unwrap_or(false);
 
-    // 2. Compression (chat only) -- must genuinely reduce what leaves the box.
+    // 2. Compression (chat only). Cut applies it to the wire. Free still
+    // computes the ratio so the dashboard can star "Cut would have saved".
+    let cut = st.entitlements.has(halo_common::license::feature::CUT);
     let mut compression_ratio = 1.0f64;
+    let mut shadow_savings = 0.0f64;
     let mut outbound = body.clone();
     if kind.is_chat() {
         let c = compress::compress_body(
@@ -234,17 +308,28 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             st.cfg.compression.whitespace,
         );
         compression_ratio = c.ratio;
-        if let Some(b) = c.body {
-            outbound = b;
-        }
-        if matches!(kind, ApiKind::AnthropicMessages) && st.cfg.compression.anthropic_cache_control {
-            if let Some(inj) = st.injector.process_anthropic(&outbound) {
-                tracing::debug!(
-                    breakpoints = inj.breakpoints,
-                    warm = inj.warm,
-                    "injected anthropic cache_control breakpoint(s)"
+        if cut {
+            if let Some(b) = c.body {
+                outbound = b;
+            }
+            if matches!(kind, ApiKind::AnthropicMessages) && st.cfg.compression.anthropic_cache_control {
+                if let Some(inj) = st.injector.process_anthropic(&outbound) {
+                    tracing::debug!(
+                        breakpoints = inj.breakpoints,
+                        warm = inj.warm,
+                        "injected anthropic cache_control breakpoint(s)"
+                    );
+                    outbound = inj.body;
+                }
+            }
+        } else if let Some(ref compressed) = c.body {
+            if c.ratio > 0.0 && c.ratio < 1.0 {
+                shadow_savings += crate::util::estimated_input_savings_usd(
+                    &st.prices,
+                    &model,
+                    outbound.len(),
+                    compressed.len(),
                 );
-                outbound = inj.body;
             }
         }
         // OpenAI-compatible streams only carry a final usage chunk if asked
@@ -273,40 +358,58 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             // safely extractable as plain text) fall through to a live call
             // rather than serving the wrong shape.
             if !is_stream || entry.answer.is_some() {
-                let response = if is_stream {
-                    let a = entry.answer.as_ref().expect("checked above");
-                    let sse = answer::render_stream(provider, a, &entry.model, entry.tokens_in, entry.tokens_out);
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header(header::CONTENT_TYPE, "text/event-stream")
-                        .body(Body::from(sse))
-                        .unwrap()
-                } else {
-                    json_response(
-                        StatusCode::from_u16(entry.status).unwrap_or(StatusCode::OK),
-                        &entry.content_type,
-                        entry.body.clone(),
-                    )
-                };
-                st.finalize_llm_call(LlmOutcome {
-                    agent: agent.clone(),
-                    subject: subject.clone(),
-                    provider,
-                    model: entry.model.clone(),
-                    tokens_in: entry.tokens_in,
-                    tokens_out: entry.tokens_out,
-                    tokens_cached: 0,
-                    task_class: kind.task_class().into(),
-                    latency_ms: 0,
-                    compression_ratio: 1.0,
-                    decision: PolicyDecision::CacheHit,
-                    error_class: String::new(),
-                    record_spend: false,
-                    streamed: is_stream,
-                    actual_cost_override: None,
-                })
-                .await;
-                return response;
+                if cut {
+                    let response = if is_stream {
+                        let a = entry.answer.as_ref().expect("checked above");
+                        let sse = answer::render_stream(
+                            provider,
+                            a,
+                            &entry.model,
+                            entry.tokens_in,
+                            entry.tokens_out,
+                        );
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(header::CONTENT_TYPE, "text/event-stream")
+                            .body(Body::from(sse))
+                            .unwrap()
+                    } else {
+                        json_response(
+                            StatusCode::from_u16(entry.status).unwrap_or(StatusCode::OK),
+                            &entry.content_type,
+                            entry.body.clone(),
+                        )
+                    };
+                    st.finalize_llm_call(LlmOutcome {
+                        agent: agent.clone(),
+                        subject: subject.clone(),
+                        provider,
+                        model: entry.model.clone(),
+                        tokens_in: entry.tokens_in,
+                        tokens_out: entry.tokens_out,
+                        tokens_cached: 0,
+                        task_class: kind.task_class().into(),
+                        latency_ms: 0,
+                        compression_ratio: 1.0,
+                        decision: PolicyDecision::CacheHit,
+                        error_class: String::new(),
+                        record_spend: false,
+                        streamed: is_stream,
+                        actual_cost_override: None,
+                        shadow_savings_usd: 0.0,
+                    })
+                    .await;
+                    return response;
+                }
+                // Free: do not serve the hit. Count what Cut would have saved
+                // (the whole provider call) and fall through.
+                shadow_savings = estimate_cost_usd(
+                    &st.prices,
+                    &entry.model,
+                    entry.tokens_in,
+                    entry.tokens_out,
+                    0,
+                );
             }
         }
     }
@@ -319,7 +422,11 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
     let approx_in = util::approx_tokens_from_chars(outbound.len());
     let projected = estimate_cost_usd(&st.prices, &model, approx_in, 1024, 0);
     let (gs, gh) = (st.cfg.budget.soft_cap_usd, st.cfg.budget.hard_cap_usd);
-    let over = st.cfg.budget.per_agent.iter().find(|a| a.agent_id == agent);
+    let over = if cut {
+        st.cfg.budget.per_agent.iter().find(|a| a.agent_id == agent)
+    } else {
+        None
+    };
     let caps = Caps {
         global_soft: gs,
         global_hard: gh,
@@ -348,6 +455,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             record_spend: false,
             streamed: false,
             actual_cost_override: None,
+            shadow_savings_usd: 0.0,
         })
         .await;
         return error_response(
@@ -377,7 +485,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
     // storing this request's own answer afterward never pays for a second
     // embedding call.
     let mut semantic_miss: Option<SemanticMissContext> = None;
-    if kind.is_chat() && st.cfg.semantic_cache.enabled {
+    if kind.is_chat() && st.cfg.semantic_cache.enabled && cut {
         if let Some(orig) = &original {
             if let Some(sq) = semantic_cache::eligible_query(orig) {
                 let embed_key = if matches!(st.embedder.kind, EmbeddingProviderKind::Openai) {
@@ -427,6 +535,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
                                 record_spend: true,
                                 streamed: is_stream,
                                 actual_cost_override: Some(er.cost_usd),
+                                shadow_savings_usd: 0.0,
                             })
                             .await;
                             return response;
@@ -454,6 +563,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
                                 record_spend: er.cost_usd > 0.0,
                                 streamed: false,
                                 actual_cost_override: Some(er.cost_usd),
+                                shadow_savings_usd: 0.0,
                             })
                             .await;
                             semantic_miss = Some(SemanticMissContext {
@@ -493,6 +603,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             record_spend: false,
             streamed: false,
             actual_cost_override: None,
+            shadow_savings_usd: 0.0,
         })
         .await;
         return error_response(
@@ -505,47 +616,91 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         );
     }
     let started = std::time::Instant::now();
-    let mut req = st
-        .http
-        .post(&url)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(outbound.clone());
-    req = match provider {
-        Provider::Anthropic => {
-            let ver = headers
-                .get("anthropic-version")
-                .and_then(|h| h.to_str().ok())
-                .unwrap_or("2023-06-01");
-            req.header("x-api-key", real_key).header("anthropic-version", ver)
-        }
-        _ => req.header(header::AUTHORIZATION, format!("Bearer {real_key}")),
-    };
-
-    let resp = match req.send().await {
+    let mut resp = match send_upstream(&st, &headers, provider, &real_key, &url, &outbound).await {
         Ok(r) => r,
         Err(e) => {
-            let err_class = if e.is_timeout() { "timeout" } else { "transport" };
-            st.finalize_llm_call(LlmOutcome {
-                agent: agent.clone(),
-                subject: subject.clone(),
-                provider,
-                model: model.clone(),
-                tokens_in: 0,
-                tokens_out: 0,
-                tokens_cached: 0,
-                task_class: kind.task_class().into(),
-                latency_ms: started.elapsed().as_millis() as u64,
-                compression_ratio,
-                decision: PolicyDecision::Allow,
-                error_class: err_class.into(),
-                record_spend: false,
-                streamed: false,
-                actual_cost_override: None,
-            })
-            .await;
-            return error_response(StatusCode::BAD_GATEWAY, &format!("upstream error: {e}"));
+            if let Some(fb) = route_backup(&st, &agent, kind) {
+                match send_upstream(&st, &headers, fb.provider, &fb.key, &fb.url, &outbound).await {
+                    Ok(r2) => {
+                        st.audit(serde_json::json!({
+                            "kind": "failover",
+                            "from_agent": agent,
+                            "to_agent": fb.agent_id,
+                            "reason": if e.is_timeout() { "timeout" } else { "transport" },
+                        }));
+                        provider = fb.provider;
+                        r2
+                    }
+                    Err(e2) => {
+                        let err_class = if e2.is_timeout() { "timeout" } else { "transport" };
+                        st.finalize_llm_call(LlmOutcome {
+                            agent: agent.clone(),
+                            subject: subject.clone(),
+                            provider,
+                            model: model.clone(),
+                            tokens_in: 0,
+                            tokens_out: 0,
+                            tokens_cached: 0,
+                            task_class: kind.task_class().into(),
+                            latency_ms: started.elapsed().as_millis() as u64,
+                            compression_ratio,
+                            decision: PolicyDecision::Allow,
+                            error_class: err_class.into(),
+                            record_spend: false,
+                            streamed: false,
+                            actual_cost_override: None,
+                            shadow_savings_usd: 0.0,
+                        })
+                        .await;
+                        return error_response(
+                            StatusCode::BAD_GATEWAY,
+                            &format!("upstream error: {e2}"),
+                        );
+                    }
+                }
+            } else {
+                let err_class = if e.is_timeout() { "timeout" } else { "transport" };
+                st.finalize_llm_call(LlmOutcome {
+                    agent: agent.clone(),
+                    subject: subject.clone(),
+                    provider,
+                    model: model.clone(),
+                    tokens_in: 0,
+                    tokens_out: 0,
+                    tokens_cached: 0,
+                    task_class: kind.task_class().into(),
+                    latency_ms: started.elapsed().as_millis() as u64,
+                    compression_ratio,
+                    decision: PolicyDecision::Allow,
+                    error_class: err_class.into(),
+                    record_spend: false,
+                    streamed: false,
+                    actual_cost_override: None,
+                    shadow_savings_usd: 0.0,
+                })
+                .await;
+                return error_response(StatusCode::BAD_GATEWAY, &format!("upstream error: {e}"));
+            }
         }
     };
+
+    if failover_status(resp.status()) {
+        if let Some(fb) = route_backup(&st, &agent, kind) {
+            match send_upstream(&st, &headers, fb.provider, &fb.key, &fb.url, &outbound).await {
+                Ok(r2) => {
+                    st.audit(serde_json::json!({
+                        "kind": "failover",
+                        "from_agent": agent,
+                        "to_agent": fb.agent_id,
+                        "reason": format!("http_{}", resp.status().as_u16()),
+                    }));
+                    provider = fb.provider;
+                    resp = r2;
+                }
+                Err(_) => {}
+            }
+        }
+    }
 
     let status = resp.status();
 
@@ -568,6 +723,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             started,
             cache_key,
             semantic_miss,
+            shadow_savings,
         )
         .await;
     }
@@ -620,6 +776,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         record_spend: status.is_success(),
         streamed: false,
         actual_cost_override: None,
+        shadow_savings_usd: shadow_savings,
     })
     .await;
 
@@ -688,6 +845,7 @@ async fn stream_response(
     started: std::time::Instant,
     cache_key: Option<String>,
     semantic_miss: Option<SemanticMissContext>,
+    shadow_savings_usd: f64,
 ) -> Response {
     let ct = upstream
         .headers()
@@ -767,6 +925,7 @@ async fn stream_response(
             record_spend: true, // bill whatever was actually streamed, even if aborted.
             streamed: true,
             actual_cost_override: None,
+            shadow_savings_usd,
         })
         .await;
 
@@ -828,9 +987,11 @@ async fn mcp_proxy(
         Err(e) => return error_response(StatusCode::BAD_REQUEST, &format!("invalid JSON-RPC: {e}")),
     };
 
-    match mgr.proxy(&server, frame).await {
+    match mgr
+        .proxy(&server, frame, st.cfg.mcp_block_uncloaked_secrets)
+        .await
+    {
         Ok((resp, report)) => {
-            let blocked_kinds = report.outbound_secret_kinds.clone();
             st.audit(serde_json::json!({
                 "kind": "mcp_call",
                 "server": server,
@@ -838,11 +999,24 @@ async fn mcp_proxy(
                 "tool": report.tool,
                 "uncloaked": report.uncloaked,
                 "scrubbed": report.scrubbed,
-                "outbound_secret_kinds": blocked_kinds,
+                "outbound_secret_kinds": report.outbound_secret_kinds,
                 "inbound_secret_kinds": report.inbound_secret_kinds,
+                "blocked": false,
             }));
             json_response(StatusCode::OK, "application/json", resp.to_string())
         }
-        Err(e) => error_response(StatusCode::BAD_GATEWAY, &format!("MCP error: {e}")),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.starts_with("MCP blocked") {
+                st.audit(serde_json::json!({
+                    "kind": "mcp_blocked",
+                    "server": server,
+                    "reason": msg,
+                }));
+                error_response(StatusCode::FORBIDDEN, &msg)
+            } else {
+                error_response(StatusCode::BAD_GATEWAY, &format!("MCP error: {e}"))
+            }
+        }
     }
 }

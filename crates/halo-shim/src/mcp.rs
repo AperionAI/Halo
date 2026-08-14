@@ -191,7 +191,15 @@ impl McpManager {
     /// Proxy one JSON-RPC frame to the named server, applying cloak/taint at
     /// the seam. Returns the (possibly scrubbed) response plus a metadata-only
     /// `SeamReport` for the audit log.
-    pub async fn proxy(&self, server: &str, frame: Value) -> Result<(Value, SeamReport)> {
+    ///
+    /// When `block_uncloaked` is true (the default), uncloaked secret shapes
+    /// in tool arguments refuse the call *before* it is forwarded.
+    pub async fn proxy(
+        &self,
+        server: &str,
+        frame: Value,
+        block_uncloaked: bool,
+    ) -> Result<(Value, SeamReport)> {
         let srv = self
             .servers
             .get(server)
@@ -219,6 +227,14 @@ impl McpManager {
                 report.outbound_secret_kinds =
                     hits.into_iter().map(|m| m.kind.to_string()).collect();
             }
+        }
+
+        if block_uncloaked && !report.outbound_secret_kinds.is_empty() {
+            let kinds = report.outbound_secret_kinds.join(", ");
+            return Err(anyhow!(
+                "MCP blocked: uncloaked secret shape(s) in tool arguments ({kinds}). \
+                 Use {{{{cloak:NAME}}}} placeholders."
+            ));
         }
 
         // Resolve {{cloak:NAME}} placeholders on the copy we forward upstream.

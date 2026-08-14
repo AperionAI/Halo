@@ -29,6 +29,9 @@ pub struct AgentRollup {
     /// Sum of `provider_cache_savings` -- the Anthropic/OpenAI prompt-cache
     /// discount, independent of whether Halo's own cache ever hit.
     pub provider_cache_savings: f64,
+    /// Free-tier shadow: what Cut would have saved (cache not served,
+    /// compression not applied). Zero when Cut is on.
+    pub shadow_savings: f64,
 }
 
 impl AgentRollup {
@@ -47,6 +50,11 @@ impl AgentRollup {
     /// semantic cache hit (never calling the provider at all).
     pub fn hit_savings(&self) -> f64 {
         (self.savings() - self.baseline_savings()).max(0.0)
+    }
+
+    /// Free-tier "what Cut would have saved" (shadow cache/compression).
+    pub fn cut_would_save(&self) -> f64 {
+        self.shadow_savings.max(0.0)
     }
 }
 
@@ -131,6 +139,7 @@ fn accumulate(
     bucket.counterfactual_cost += e.counterfactual_cost;
     bucket.compression_savings += breakdown.compression_savings;
     bucket.provider_cache_savings += breakdown.provider_cache_savings;
+    bucket.shadow_savings += e.shadow_savings_usd;
 }
 
 /// Render a compact text report for the CLI.
@@ -156,6 +165,12 @@ pub fn render(report: &Report) -> String {
         fmt_usd(t.counterfactual_cost)
     ));
     out.push_str(&format!("Estimated saved: {}\n", fmt_usd(t.savings())));
+    if t.shadow_savings > 0.0 {
+        out.push_str(&format!(
+            "Cut would have saved: {}  (* cache/compression not applied on Free)\n",
+            fmt_usd(t.shadow_savings)
+        ));
+    }
     out.push_str(&format!(
         "  of which baseline (compression {} + provider cache {}): {}  -- applies even at 0% hit rate\n",
         fmt_usd(t.compression_savings),
@@ -237,6 +252,7 @@ struct RollupJson {
     savings: f64,
     baseline_savings: f64,
     hit_savings: f64,
+    shadow_savings: f64,
 }
 
 #[derive(serde::Serialize)]
@@ -265,6 +281,7 @@ fn rollup_json(r: &AgentRollup) -> RollupJson {
         savings: r.savings(),
         baseline_savings: r.baseline_savings(),
         hit_savings: r.hit_savings(),
+        shadow_savings: r.cut_would_save(),
     }
 }
 
@@ -330,6 +347,7 @@ mod tests {
             },
             compression_ratio: 1.0,
             error_class: String::new(),
+            shadow_savings_usd: 0.0,
         }
     }
 
@@ -408,5 +426,16 @@ mod tests {
         assert!(a.provider_cache_savings > 0.0, "expected nonzero provider-cache savings");
         assert!(a.hit_savings() > 0.0, "expected nonzero hit savings from the cache-hit event");
         assert!((a.baseline_savings() + a.hit_savings() - a.savings()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cut_would_save_sums_shadow() {
+        let mut free = ev("a", "gpt-4o", 0.10, 0.10, false);
+        free.shadow_savings_usd = 0.04;
+        let r = build(&[free], None, &PriceTable::default());
+        assert!((r.total.cut_would_save() - 0.04).abs() < 1e-9);
+        assert!((r.total.savings() - 0.0).abs() < 1e-9);
+        let rendered = render(&r);
+        assert!(rendered.contains("Cut would have saved"));
     }
 }

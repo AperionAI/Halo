@@ -165,6 +165,7 @@ mod tests {
             policy_decision: PolicyDecision::Allow,
             compression_ratio: 1.0,
             error_class: String::new(),
+            shadow_savings_usd: 0.0,
         }
     }
 
