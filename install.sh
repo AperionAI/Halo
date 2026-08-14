@@ -16,10 +16,35 @@ REPO="${HALO_DIST_REPO:-AperionAI/halo-dist}"
 BIN="halo"
 # Override with HALO_INSTALL_DIR=... to change the destination.
 INSTALL_DIR="${HALO_INSTALL_DIR:-}"
-# Override with HALO_VERSION=halo-v1.3.3 to pin; default is the latest release.
+# Override with HALO_VERSION=halo-v1.4.1 to pin; default is the latest release.
 VERSION="${HALO_VERSION:-latest}"
 
 err() { echo "halo-install: $*" >&2; exit 1; }
+
+# Tell the user how to put $1 on PATH in this shell and in their rc file.
+path_hint() {
+  dir="$1"
+  echo "halo-install: NOTE: $dir is not on your PATH."
+  echo "  This shell:"
+  echo "    export PATH=\"$dir:\$PATH\""
+  shellname="$(basename "${SHELL:-sh}")"
+  case "$shellname" in
+    zsh) rc="$HOME/.zshrc" ;;
+    bash)
+      if [ "$(uname -s)" = Darwin ]; then rc="$HOME/.bash_profile"
+      else rc="$HOME/.bashrc"
+      fi
+      ;;
+    fish) rc="$HOME/.config/fish/config.fish" ;;
+    *) rc="$HOME/.profile" ;;
+  esac
+  echo "  Permanent:"
+  if [ "$shellname" = fish ]; then
+    echo "    echo 'fish_add_path $dir' >> $rc"
+  else
+    echo "    echo 'export PATH=\"$dir:\$PATH\"' >> $rc"
+  fi
+}
 
 detect_target() {
   os="$(uname -s)"
@@ -98,8 +123,7 @@ main() {
   fi
   case ":$PATH:" in
     *":$dir:"*) : ;;
-    *) echo "halo-install: NOTE: $dir is not on your PATH. Add it, e.g.:"
-       echo "  echo 'export PATH=\"$dir:\$PATH\"' >> ~/.profile" ;;
+    *) path_hint "$dir" ;;
   esac
   "$dir/$BIN" --version || true
   echo "halo-install: done. Next: 'halo agent add <name> --provider ...' then 'halo serve'."

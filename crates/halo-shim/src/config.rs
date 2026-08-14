@@ -218,7 +218,7 @@ fn normalize_host(host: &str) -> String {
 }
 
 fn is_never_deny(host: &str) -> bool {
-    NEVER_DENY.iter().any(|h| host == *h)
+    NEVER_DENY.contains(&host)
 }
 
 fn host_matches_any(host: &str, rules: &[String]) -> bool {
@@ -671,8 +671,7 @@ mod tests {
     #[test]
     fn existing_yaml_without_caps_stays_uncapped() {
         let cfg: Config = serde_yaml::from_str("listen: \"127.0.0.1:8787\"\n").unwrap();
-        let with_window: Config =
-            serde_yaml::from_str("budget:\n  window_hours: 24\n").unwrap();
+        let with_window: Config = serde_yaml::from_str("budget:\n  window_hours: 24\n").unwrap();
         assert_eq!(with_window.budget.soft_cap_usd, None);
         assert_eq!(with_window.budget.hard_cap_usd, None);
         assert_eq!(cfg.budget.soft_cap_usd, Some(25.0));

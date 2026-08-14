@@ -69,9 +69,7 @@ enum Cmd {
         out: Option<std::path::PathBuf>,
     },
     /// Emergency stop: revoke an agent's key so the proxy refuses it at once.
-    Kill {
-        agent: String,
-    },
+    Kill { agent: String },
     /// Manage the semantic cache's embedding API credential.
     Embeddings {
         #[command(subcommand)]
@@ -264,8 +262,7 @@ impl From<ProviderArg> for Provider {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -335,12 +332,7 @@ fn openclaw_cmd(paths: Paths, action: OpenclawCmd) -> Result<()> {
             let oc = openclaw::OpenclawPaths::resolve(home, runtime_agent.as_deref(), &agent)?;
             let base_url = format!("http://{}", cfg.listen);
             let result = openclaw::apply(&oc, &base_url, &rec.virtual_key, dry_run)?;
-            if dry_run {
-                println!("dry-run: would write {}", result.config.display());
-                println!("{}", result.config_out);
-                println!("dry-run: would write {}", result.auth.display());
-                println!("{}", result.auth_out);
-            } else {
+            if result.wrote {
                 println!(
                     "Patched OpenClaw runtime agent '{}' to use Halo at {base_url}.",
                     result.runtime_agent
@@ -351,6 +343,11 @@ fn openclaw_cmd(paths: Paths, action: OpenclawCmd) -> Result<()> {
                     "Restart the OpenClaw gateway, then verify with:\n  \
                      sudo lsof -nP -i -a -p <gateway-pid> -r2 | grep -E '8787|:443'"
                 );
+            } else {
+                println!("dry-run: would write {}", result.config.display());
+                println!("{}", result.config_out);
+                println!("dry-run: would write {}", result.auth.display());
+                println!("{}", result.auth_out);
             }
         }
     }
@@ -374,8 +371,14 @@ fn registry_cmd(paths: Paths, action: RegistryCmd) -> Result<()> {
             let events = telem.local_events();
             let entitlements = cfg.entitlements();
             let prices = cfg.price_table();
-            let report =
-                registry::build_registry(&records, &events, &prices, &cfg.mcp_servers, &entitlements, &device_id);
+            let report = registry::build_registry(
+                &records,
+                &events,
+                &prices,
+                &cfg.mcp_servers,
+                &entitlements,
+                &device_id,
+            );
             let rendered = match format {
                 RegistryFormat::Json => serde_json::to_string_pretty(&report)?,
                 RegistryFormat::Csv => registry::agents_to_csv(&report),
@@ -564,6 +567,7 @@ fn agent_cmd(paths: Paths, action: AgentCmd) -> Result<()> {
     let cfg = config::Config::load(&paths.config()).unwrap_or_default();
     let listen = cfg.listen.clone();
     let cred_fallback = paths.cred_fallback();
+    let data_dir = paths.base.clone();
     let ks = keys::KeyStore::new(paths);
     match action {
         AgentCmd::Add {
@@ -578,7 +582,8 @@ fn agent_cmd(paths: Paths, action: AgentCmd) -> Result<()> {
                 Some(k) => k,
                 None => read_secret()?,
             };
-            let (vkey, backend) = ks.issue(&name, provider.into(), secret.trim(), base_url.clone())?;
+            let (vkey, backend) =
+                ks.issue(&name, provider.into(), secret.trim(), base_url.clone())?;
             println!("Registered agent '{name}'. Configure your runtime with:\n");
             match Provider::from(provider) {
                 Provider::Anthropic => {
@@ -596,9 +601,19 @@ fn agent_cmd(paths: Paths, action: AgentCmd) -> Result<()> {
                     }
                 }
             }
+            println!("\nData dir: {}", data_dir.display());
+            if std::env::var_os("HALO_HOME").is_some() {
+                println!("Same HALO_HOME must be set for `halo serve` and later commands.");
+            } else {
+                println!(
+                    "Default location (~/.halo). If the proxy uses HALO_HOME, set it here too."
+                );
+            }
             match backend {
                 keys::SecretBackend::Keychain => {
-                    println!("\nThe real provider key is stored in your OS keychain, never on disk.");
+                    println!(
+                        "\nThe real provider key is stored in your OS keychain, never on disk."
+                    );
                 }
                 keys::SecretBackend::EncryptedFile => {
                     println!(
@@ -615,7 +630,9 @@ fn agent_cmd(paths: Paths, action: AgentCmd) -> Result<()> {
         AgentCmd::List => {
             let recs = ks.records()?;
             if recs.is_empty() {
-                println!("No agents registered. Add one with `halo agent add <name> --provider ...`.");
+                println!(
+                    "No agents registered. Add one with `halo agent add <name> --provider ...`."
+                );
             }
             for r in recs {
                 let status = if r.is_active() { "active" } else { "revoked" };
@@ -661,7 +678,33 @@ fn read_secret() -> Result<String> {
 fn status(paths: Paths) -> Result<()> {
     let cfg = Config::load(&paths.config())?;
     let ks = keys::KeyStore::new(paths.clone());
-    let ledger = budget::Ledger::open(&paths.ledger(), cfg.budget.window_hours)?;
+    let recs = ks.records()?;
+    let (spend, spend_note) =
+        match budget::Ledger::try_open(&paths.ledger(), cfg.budget.window_hours)? {
+            Some(ledger) => (ledger.spend_by_agent()?, None),
+            None => {
+                let telem = telemetry::Telemetry::new(
+                    ks.device_id().unwrap_or_else(|_| "unknown".into()),
+                    None,
+                    None,
+                    paths.spool_dir(),
+                    paths.base.join("telemetry.jsonl"),
+                );
+                let events = telem.local_events();
+                let since =
+                    Some(chrono::Utc::now().timestamp() - (cfg.budget.window_hours as i64) * 3600);
+                let r = report::build(&events, since, &cfg.price_table());
+                let spend = r
+                    .by_agent
+                    .into_iter()
+                    .map(|(a, roll)| (a, roll.actual_cost))
+                    .collect();
+                (
+                    spend,
+                    Some("spend from local log; ledger is held by a running `halo serve`"),
+                )
+            }
+        };
 
     println!("Smartflow Halo -- status");
     println!("Data dir: {}", paths.base.display());
@@ -670,8 +713,6 @@ fn status(paths: Paths) -> Result<()> {
         "Relay:   {}",
         cfg.relay_url.as_deref().unwrap_or("(local-only mode)")
     );
-    let recs = ks.records()?;
-    let spend = ledger.spend_by_agent()?;
     let spent_global: f64 = spend.iter().map(|(_, c)| *c).sum();
     println!(
         "Caps:    global soft {:?}  hard {:?}  window {}h",
@@ -684,8 +725,16 @@ fn status(paths: Paths) -> Result<()> {
                 "         spent ${spent_global:.4} this window, ${remaining:.4} left before the kill switch"
             );
             println!("         raise `budget.hard_cap_usd` in ~/.halo/config.yaml (or the dashboard) to lift it");
+            if let Some(note) = spend_note {
+                println!("         ({note})");
+            }
         }
-        None => println!("         no hard cap set -- a runaway will bill until you add one"),
+        None => {
+            println!("         no hard cap set -- a runaway will bill until you add one");
+            if let Some(note) = spend_note {
+                println!("         ({note})");
+            }
+        }
     }
     let denied = cfg.egress.effective_denied();
     println!(
@@ -702,7 +751,11 @@ fn status(paths: Paths) -> Result<()> {
     }
     println!(
         "At rest: {}",
-        if cfg.encrypt_at_rest { "encrypted (cache + semantic cache)" } else { "plaintext (encrypt_at_rest: false)" }
+        if cfg.encrypt_at_rest {
+            "encrypted (cache + semantic cache)"
+        } else {
+            "plaintext (encrypt_at_rest: false)"
+        }
     );
 
     println!("\nAgents:");
@@ -821,7 +874,9 @@ async fn serve(paths: Paths) -> Result<()> {
     // because silently falling back to plaintext would violate exactly what
     // the operator asked for.
     let vault_passphrase = if cfg.encrypt_at_rest {
-        let pass = std::env::var("HALO_VAULT_PASSPHRASE").ok().filter(|s| !s.is_empty());
+        let pass = std::env::var("HALO_VAULT_PASSPHRASE")
+            .ok()
+            .filter(|s| !s.is_empty());
         if pass.is_none() {
             anyhow::bail!(
                 "encrypt_at_rest is true in config.yaml but $HALO_VAULT_PASSPHRASE is unset. \
@@ -833,7 +888,9 @@ async fn serve(paths: Paths) -> Result<()> {
         None
     };
     if vault_passphrase.is_some() {
-        tracing::info!("encrypt_at_rest is on: cache.redb and semantic_cache.redb content is sealed");
+        tracing::info!(
+            "encrypt_at_rest is on: cache.redb and semantic_cache.redb content is sealed"
+        );
     }
 
     let cache = cache::CacheStore::open_with_encryption(
@@ -843,7 +900,8 @@ async fn serve(paths: Paths) -> Result<()> {
         vault_passphrase.clone(),
     )?;
     // Free tier caps the semantic-cache working set; a license lifts it.
-    let semantic_max = if entitlements.has(halo_common::license::feature::SEMANTIC_CACHE_UNLIMITED) {
+    let semantic_max = if entitlements.has(halo_common::license::feature::SEMANTIC_CACHE_UNLIMITED)
+    {
         cfg.semantic_cache.max_entries
     } else {
         let ceiling = halo_common::license::FREE_SEMANTIC_CACHE_MAX_ENTRIES;
@@ -922,11 +980,13 @@ async fn serve(paths: Paths) -> Result<()> {
     // Remote kill overlay: only active with a relay AND the `remote_kill`
     // entitlement. Everything else about the proxy is unchanged when it's off.
     let remote_revocations = revocations::RemoteRevocations::new();
-    let remote_kill_on = entitlements.has(halo_common::license::feature::REMOTE_KILL)
-        && cfg.relay_url.is_some();
+    let remote_kill_on =
+        entitlements.has(halo_common::license::feature::REMOTE_KILL) && cfg.relay_url.is_some();
     if remote_kill_on {
         let relay_url = cfg.relay_url.clone().expect("checked is_some");
-        tracing::info!("remote kill enabled (best-effort; local kill switch remains authoritative)");
+        tracing::info!(
+            "remote kill enabled (best-effort; local kill switch remains authoritative)"
+        );
         tokio::spawn(revocations::poll_loop(
             http.clone(),
             relay_url,
@@ -1029,7 +1089,10 @@ mod tests {
     fn free_tier_allows_up_to_the_limit() {
         let free = halo_common::Entitlements::default();
         for n in 0..halo_common::license::FREE_AGENT_LIMIT as usize {
-            assert!(check_agent_cap(n, &free).is_ok(), "expected {n} to be under the cap");
+            assert!(
+                check_agent_cap(n, &free).is_ok(),
+                "expected {n} to be under the cap"
+            );
         }
     }
 

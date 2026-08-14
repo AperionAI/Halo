@@ -12,7 +12,7 @@
 //! hard cap.
 
 use anyhow::Result;
-use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition};
+use redb::{Database, DatabaseError, ReadableTable, ReadableTableMetadata, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -52,7 +52,19 @@ pub struct Ledger {
 
 impl Ledger {
     pub fn open(path: &Path, window_hours: u64) -> Result<Arc<Self>> {
-        let db = Database::create(path)?;
+        Self::try_open(path, window_hours)?
+            .ok_or_else(|| anyhow::anyhow!("Database already open. Cannot acquire lock."))
+    }
+
+    /// Like [`open`], but `Ok(None)` when another process (usually `halo serve`)
+    /// already holds the file. CLI reads (`halo status`) use this instead of
+    /// dying on the exclusive lock.
+    pub fn try_open(path: &Path, window_hours: u64) -> Result<Option<Arc<Self>>> {
+        let db = match Database::create(path) {
+            Ok(db) => db,
+            Err(DatabaseError::DatabaseAlreadyOpen) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
         {
             let w = db.begin_write()?;
             {
@@ -60,10 +72,10 @@ impl Ledger {
             }
             w.commit()?;
         }
-        Ok(Arc::new(Self {
+        Ok(Some(Arc::new(Self {
             db,
             window_millis: (window_hours as i64) * 3_600_000,
-        }))
+        })))
     }
 
     /// Record actual spend after a call completes.
@@ -232,5 +244,13 @@ mod tests {
         let (global, a) = l.spend("a").unwrap();
         assert_eq!(global, 6.0);
         assert_eq!(a, 5.0);
+    }
+
+    #[test]
+    fn try_open_none_while_held() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("l.redb");
+        let _held = Ledger::open(&path, 24).unwrap();
+        assert!(Ledger::try_open(&path, 24).unwrap().is_none());
     }
 }

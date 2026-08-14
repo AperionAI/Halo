@@ -38,7 +38,9 @@ pub fn patch_openclaw_json(raw: &str, base_url: &str, vkey: &str) -> Result<Stri
     let providers_obj = providers
         .as_object_mut()
         .ok_or_else(|| anyhow!("openclaw.json models.providers must be an object"))?;
-    let anthropic = providers_obj.entry("anthropic").or_insert_with(|| json!({}));
+    let anthropic = providers_obj
+        .entry("anthropic")
+        .or_insert_with(|| json!({}));
     let anth_obj = anthropic
         .as_object_mut()
         .ok_or_else(|| anyhow!("openclaw.json models.providers.anthropic must be an object"))?;
@@ -47,15 +49,12 @@ pub fn patch_openclaw_json(raw: &str, base_url: &str, vkey: &str) -> Result<Stri
     anth_obj.insert("apiKey".into(), json!(vkey));
 
     let request = anth_obj.entry("request").or_insert_with(|| json!({}));
-    let request_obj = request
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("openclaw.json models.providers.anthropic.request must be an object"))?;
+    let request_obj = request.as_object_mut().ok_or_else(|| {
+        anyhow!("openclaw.json models.providers.anthropic.request must be an object")
+    })?;
     request_obj.insert("allowPrivateNetwork".into(), json!(true));
 
-    let needs_models = match anth_obj.get("models") {
-        Some(Value::Array(a)) if !a.is_empty() => false,
-        _ => true,
-    };
+    let needs_models = !matches!(anth_obj.get("models"), Some(Value::Array(a)) if !a.is_empty());
     if needs_models {
         anth_obj.insert(
             "models".into(),
@@ -87,9 +86,9 @@ pub fn patch_auth_profiles(raw: &str, vkey: &str) -> Result<String> {
     let entry = profiles_obj
         .entry("anthropic:default")
         .or_insert_with(|| json!({}));
-    let entry_obj = entry
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("auth-profiles.json profiles['anthropic:default'] must be an object"))?;
+    let entry_obj = entry.as_object_mut().ok_or_else(|| {
+        anyhow!("auth-profiles.json profiles['anthropic:default'] must be an object")
+    })?;
     entry_obj.insert("key".into(), json!(vkey));
     Ok(serde_json::to_string_pretty(&root)?)
 }
@@ -245,7 +244,10 @@ mod tests {
         }"#;
         let out = patch_openclaw_json(raw, "http://127.0.0.1:8787", "sf_live_claw_abc").unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["models"]["providers"]["anthropic"]["models"][0]["id"], "claude-opus-4");
+        assert_eq!(
+            v["models"]["providers"]["anthropic"]["models"][0]["id"],
+            "claude-opus-4"
+        );
         assert_eq!(
             v["models"]["providers"]["anthropic"]["request"]["allowPrivateNetwork"],
             true
@@ -267,15 +269,22 @@ mod tests {
     fn auth_store_sets_anthropic_default_key() {
         let out = patch_auth_profiles("{}", "sf_live_claw_abc").unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["profiles"]["anthropic:default"]["key"], "sf_live_claw_abc");
+        assert_eq!(
+            v["profiles"]["anthropic:default"]["key"],
+            "sf_live_claw_abc"
+        );
     }
 
     #[test]
     fn auth_store_preserves_other_profile_fields() {
-        let raw = r#"{ "profiles": { "anthropic:default": { "key": "old", "provider": "anthropic" } } }"#;
+        let raw =
+            r#"{ "profiles": { "anthropic:default": { "key": "old", "provider": "anthropic" } } }"#;
         let out = patch_auth_profiles(raw, "sf_live_claw_abc").unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["profiles"]["anthropic:default"]["key"], "sf_live_claw_abc");
+        assert_eq!(
+            v["profiles"]["anthropic:default"]["key"],
+            "sf_live_claw_abc"
+        );
         assert_eq!(v["profiles"]["anthropic:default"]["provider"], "anthropic");
     }
 

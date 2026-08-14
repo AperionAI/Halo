@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.1
+
+Operator nits from the 1.4.0 smoke. Same Free firewall as 1.4.0.
+
+- **`halo status` while `halo serve` is running.** The spend ledger is exclusive; status used to die with `Database already open`. It now reads spend from the local log instead.
+- **Installer PATH hint.** Detects zsh/bash/fish, writes the matching rc file (`~/.zshrc` on this Mac), and prints `export PATH=...` for the current shell so the next `halo` works.
+- **`halo agent add` prints the data directory** so a second terminal does not mint the key into `~/.halo` while the proxy is on `$HALO_HOME`.
+
 ## 1.4.0
 
 R3 starts here: the Free / Cut / Route / Govern ladder is a real license
