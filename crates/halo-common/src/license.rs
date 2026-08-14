@@ -50,7 +50,7 @@ pub const ROUTE_HISTORY_HOURS: u64 = 90 * 24;
 /// The matching private key is held by Aperion offline and never ships in any
 /// binary. Override at verify time (e.g. staging keys) with the
 /// `HALO_LICENSE_PUBKEY` env var (same base64url encoding).
-pub const APERION_LICENSE_PUBKEY_B64URL: &str = "jvACr3xrphfIeojOqDud3ezYU0kMMCTllMVzopRijNY";
+pub const APERION_LICENSE_PUBKEY_B64URL: &str = "lQbv4rTnKo-hn1b1sv6nlM04QF2dh4jwacpSW59SwkY";
 
 /// Paid feature flags. Kept as string constants (not an enum) on purpose: a
 /// newer license that names a feature an older binary doesn't recognize is

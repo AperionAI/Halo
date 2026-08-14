@@ -23,10 +23,9 @@ Add `?go=1` to a buy URL to skip the landing and 302 to Stripe.
 - Optional: `POSTMARK_SERVER_TOKEN` + `POSTMARK_FROM` to email the token
 
 Signing seed is a 32-byte file with an explicit `hex:` prefix. The Halo
-binary's embedded pubkey (`jvACr3xrphfIeojOqDud3ezYU0kMMCTllMVzopRijNY`) must
-match it. Staging keys need `HALO_LICENSE_PUBKEY` on the client. For
-production keys that verify out of the box, put the production seed at
-`/opt/halo-license/signing.seed` (mode 0600) and restart `halo-license`.
+binary's embedded pubkey (`lQbv4rTnKo-hn1b1sv6nlM04QF2dh4jwacpSW59SwkY`) must
+match it. Staging seed is backed up as `signing.seed.staging.bak` on the
+license box. 1.5.1+ verifies production keys with no `HALO_LICENSE_PUBKEY`.
 
 After checkout the customer runs `halo license apply` (Halo 1.5+).
 

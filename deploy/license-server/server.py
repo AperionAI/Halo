@@ -366,7 +366,7 @@ def render_page(title: str, body: str) -> str:
         "<a href=\"https://deploy.langsmart.app/halo/buy/cut\">Buy Cut</a>"
         "<a href=\"https://deploy.langsmart.app/halo/buy/route\">Buy Route</a>"
         "</nav>"
-        "<span class=\"badge-version\">1.5</span>"
+        "<span class=\"badge-version\">1.5.1</span>"
         "</header>\n"
         f"<main>{body}</main>\n"
         "</body></html>\n"

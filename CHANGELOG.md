@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.1
+
+Production signing key. Paid licenses now verify in stock Halo with no
+`HALO_LICENSE_PUBKEY` override. The private seed lives only on the license
+box; this release just bakes in the matching pubkey. Govern is still refused.
+
 ## 1.5.0
 
 Stripe checkout is live for Cut (Route uses the same path). After you pay,
@@ -14,8 +20,7 @@ Stripe checkout is live for Cut (Route uses the same path). After you pay,
 - Optional Postmark (`POSTMARK_SERVER_TOKEN` + `POSTMARK_FROM`) emails the
   token. Thanks page works without it.
 
-Govern is still refused. Production keys need the production signing seed on
-the license box so they verify without `HALO_LICENSE_PUBKEY`.
+Govern is still refused.
 
 ## 1.4.1
 

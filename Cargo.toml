@@ -13,7 +13,7 @@ members = ["crates/halo-common", "crates/halo-shim", "crates/halo-relay"]
 # Kept in lockstep with the public release/tag scheme (`halo-vX.Y.Z`) and the
 # marketing one-pager, so `halo --version` matches what users are told to
 # expect. Bump this and the halo-common dep requirements below together.
-version = "1.5.0"
+version = "1.5.1"
 edition = "2021"
 license-file = "LICENSE"
 authors = ["Aperion <support@aperion.ai>"]
