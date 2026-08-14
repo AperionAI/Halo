@@ -79,6 +79,14 @@ pub struct Config {
     #[serde(default)]
     pub failover: BTreeMap<String, String>,
 
+    /// Route-tier task-class routing. `by_class` maps a class (`chat`,
+    /// `embedding`, `code`, or `X-Halo-Task-Class`) to another agent whose
+    /// provider/key is used on the wire. `models` optionally rewrites the
+    /// request model for that class (the GLM cheap lane). Spend still hits
+    /// the inbound agent's cap.
+    #[serde(default)]
+    pub routing: RoutingConfig,
+
     /// Per-model price overrides. The built-in table is a small, hand-maintained
     /// approximation (unlike LiteLLM's continuously-updated price file) and its
     /// fallback for an unrecognized model is a mid-tier guess -- fine most of the
@@ -132,6 +140,7 @@ impl Default for Config {
             mcp_servers: Vec::new(),
             mcp_block_uncloaked_secrets: true,
             failover: BTreeMap::new(),
+            routing: RoutingConfig::default(),
             price_overrides: Vec::new(),
             dashboard: DashboardConfig::default(),
             egress: EgressConfig::default(),
@@ -248,6 +257,16 @@ fn host_matches_rule(host: &str, rule: &str) -> bool {
         }
         _ => host == rule,
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RoutingConfig {
+    /// task class -> agent id whose provider key is used on the wire.
+    #[serde(default)]
+    pub by_class: BTreeMap<String, String>,
+    /// task class -> model name rewrite (e.g. `code: glm-4.7`).
+    #[serde(default)]
+    pub models: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -629,6 +648,17 @@ mod tests {
         let cfg: Config = serde_yaml::from_str("listen: 127.0.0.1:8787\n").unwrap();
         assert!(cfg.mcp_block_uncloaked_secrets);
         assert!(cfg.failover.is_empty());
+        assert!(cfg.routing.by_class.is_empty());
+    }
+
+    #[test]
+    fn routing_by_class_deserializes() {
+        let cfg: Config = serde_yaml::from_str(
+            "routing:\n  by_class:\n    code: glm\n  models:\n    code: glm-4.7\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.routing.by_class.get("code").unwrap(), "glm");
+        assert_eq!(cfg.routing.models.get("code").unwrap(), "glm-4.7");
     }
 
     #[test]

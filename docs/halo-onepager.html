@@ -5,7 +5,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Smartflow Halo — One-Pager — APERION</title>
-<meta name="description" content="Smartflow Halo one-pager: install in one line, point your agent runtime at it, get budgets + kill switch, caching, compression, MCP cloak, and a local dashboard. Free tier, binary-only, built for OpenClaw-scale self-hosted agents.">
+<meta name="description" content="Smartflow Halo 1.6.5: local firewall for self-hosted agents. Free meters and caps. Cut applies cache and compression. OpenClaw and Hermes in one command.">
 <meta name="keywords" content="Smartflow Halo, self-hosted AI agents, OpenClaw, LLM proxy, budget kill switch, semantic cache, prompt caching, MCP cloak, AI governance, local dashboard">
 <meta name="author" content="APERION">
 <meta name="robots" content="index, follow">
@@ -230,7 +230,7 @@ table.market .no { color: #64748b; }
     <a href="aperion-shield.html">Aperion Shield</a>
     <a href="index.html#support">Support</a>
   </div>
-  <span class="g-badge">v1.3 — One-Pager</span>
+  <span class="g-badge">v1.6.5 — One-Pager</span>
 </nav>
 
 <div class="container">
@@ -251,16 +251,16 @@ table.market .no { color: #64748b; }
 
   <!-- ─────── HEADER ─────── -->
   <div class="header">
-    <div class="version-chip">Smartflow Halo · v1.3 · One-Pager</div>
+    <div class="version-chip">Smartflow Halo · v1.6.5 · One-Pager</div>
     <h1>Runtime governance for self-hosted<br>AI agents, in one binary.</h1>
     <p class="tagline">
-      Halo sits between your agent runtime and the model providers (and your MCP servers). Budgets with a real kill switch, exact + cross-provider semantic caching, compression, MCP secret cloaking, and a local dashboard — no cloud, no account, and <strong>no model of any kind running inside the process</strong>. Free tier, forever.
+      Halo sits between your agent runtime and the model providers (and your MCP servers). Free is the firewall: meter, cap, kill switch, denylist. Cut ($50/mo) is named Cut because it cuts the bill — cache, compression, prompt-cache injection. Route ($100) adds failover. Keys stay on the box. No model of any kind runs inside the process.
     </p>
     <div class="badge-row">
-      <span class="badge badge-emerald"><i class="fas fa-code-branch"></i>&nbsp;Free tier, forever</span>
+      <span class="badge badge-emerald"><i class="fas fa-code-branch"></i>&nbsp;Free firewall, forever</span>
       <span class="badge badge-teal"><i class="fas fa-gauge-high"></i>&nbsp;Hard-cap kill switch</span>
       <span class="badge badge-blue"><i class="fas fa-desktop"></i>&nbsp;macOS · Linux · Windows</span>
-      <span class="badge badge-violet"><i class="fab fa-rust"></i>&nbsp;65 tests · 0 LLMs bundled</span>
+      <span class="badge badge-violet"><i class="fab fa-rust"></i>&nbsp;153 tests · 0 LLMs bundled</span>
     </div>
   </div>
 
@@ -311,7 +311,7 @@ github.com/AperionAI/halo-dist
       <span class="area-tag tag-new">OpenAI / Anthropic / OpenClaw</span>
     </div>
     <div class="feature-body">
-      Halo mints a virtual key mapped to your real provider key (stored in your OS keychain — never on disk). Swap two env vars and every call now flows through budgets, caching, and compression:
+      Halo mints a virtual key mapped to your real provider key (stored in your OS keychain — never on disk). Swap two env vars and every call now flows through the firewall. OpenClaw and Hermes get a one-command patch because env vars are not enough on those runtimes:
     </div>
 <div class="code-block"><span class="cm"># 1. Register — the real key goes straight to your OS keychain.</span>
 halo agent add researcher --provider openai --key sk-...
@@ -320,17 +320,18 @@ halo agent add researcher --provider openai --key sk-...
 <span class="k">export</span> OPENAI_API_KEY=<span class="s">sf_live_researcher_...</span>   <span class="cm"># virtual key printed above</span>
 <span class="k">export</span> OPENAI_BASE_URL=<span class="n">http://127.0.0.1:8787/v1</span>
 
-<span class="cm"># 3. Run it. Any OpenAI-compatible third party works too (Groq, Together,</span>
-<span class="cm">#    Fireworks, a local vLLM/Ollama server) via --base-url on agent add.</span>
-halo serve</div>
+<span class="cm"># 3. Run it. OpenClaw: don't set env vars — they ignore them.</span>
+halo serve
+halo openclaw apply --agent researcher
+halo hermes apply --agent researcher</div>
     <div class="feature-body">
-      Anthropic works identically (<code>--provider anthropic</code>, <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787</code>). Streaming passes through live, never buffered.
+      Anthropic works identically (<code>--provider anthropic</code>, <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787</code>). Hermes: <code>halo hermes apply</code> writes <code>~/.hermes/config.yaml</code> and <code>.env</code> — env vars alone are not enough. Streaming passes through live. Buy Cut: <a href="https://deploy.langsmart.app/halo/buy/cut" style="color:#5eead4;">deploy.langsmart.app/halo/buy/cut</a>.
     </div>
   </div>
 
   <!-- ─────── ARCHITECTURE ─────── -->
   <div class="area-heading">How it sees the traffic</div>
-  <div class="arch"><span class="sub">Your agent runtime (OpenClaw, a custom agent, ...)</span>
+  <div class="arch"><span class="sub">Your agent runtime (OpenClaw, Hermes, a custom agent, ...)</span>
        <span class="acc">│</span> OpenAI/Anthropic-shaped HTTP, virtual key
        <span class="acc">▼</span>
 <span class="acc">┌────────────────────────────────────────────────────────────┐</span>
@@ -347,7 +348,7 @@ halo serve</div>
 <span class="sub">real provider (OpenAI, Anthropic, ...)</span>   <span class="sub">optional relay (savings dashboard)</span></div>
 
   <!-- ─────── CORE FEATURES ─────── -->
-  <div class="area-heading">What's inside (all free, all local)</div>
+  <div class="area-heading">What's inside</div>
   <div class="two-col">
     <div class="feature security">
       <div class="feature-header">
@@ -366,7 +367,7 @@ halo serve</div>
         <span class="area-tag tag-new">cross-provider</span>
       </div>
       <div class="feature-body">
-        Exact-match cache for byte-identical repeats, plus an optional <strong>semantic cache</strong> that catches reworded repeats — even across providers, so an answer first generated by Anthropic can serve a later OpenAI-routed request. Cosine similarity is always re-checked at request time; no vector fuzziness ships without a live re-verify.
+        Cut applies exact-match cache for byte-identical repeats, plus an optional <strong>semantic cache</strong> that catches reworded repeats — even across providers. Free still writes the exact-match cache so the dashboard can star what Cut would have saved. Cosine similarity is always re-checked at request time.
       </div>
     </div>
   </div>
@@ -377,7 +378,7 @@ halo serve</div>
         <div class="feature-title-wrap"><div class="feature-title">Compression & prompt-cache injection</div></div>
       </div>
       <div class="feature-body">
-        Meaning-preserving phrase reduction + whitespace collapsing shrink the wire body. Anthropic <code>cache_control</code> breakpoints get injected on large/repeated system prompts, tool defs, and attachments. This is the baseline savings floor — it applies even at a 0% cache-hit rate.
+        Cut shrinks the wire body (phrase reduction + whitespace) and injects Anthropic <code>cache_control</code> on large/repeated system prompts, tool defs, and attachments. Free computes the same ratio and stars the dollars. That's the bill cut.
       </div>
     </div>
     <div class="feature security">
@@ -394,7 +395,7 @@ halo serve</div>
   <div class="feature infra">
     <div class="feature-header">
       <div class="feature-num blue">06</div>
-      <div class="feature-title-wrap"><div class="feature-title">Local dashboard — new in v1.2</div></div>
+      <div class="feature-title-wrap"><div class="feature-title">Local dashboard</div></div>
       <span class="area-tag tag-infra">http://127.0.0.1:8788</span>
     </div>
     <div class="feature-body">
@@ -415,38 +416,38 @@ halo serve</div>
         <tr><td><code>halo kill &lt;agent&gt;</code></td>       <td class="muted">Emergency stop: revoke a key, refused at once, zero network required.</td></tr>
         <tr><td><code>halo dashboard token</code></td>          <td class="muted">Print (or <code>--regenerate</code>) the local token that gates dashboard writes.</td></tr>
         <tr><td><code>halo embeddings set-key</code></td>       <td class="muted">Store the embedding API credential used by the semantic cache.</td></tr>
-        <tr><td><code>halo license show</code></td>             <td class="muted">Current tier, entitled features, and expiry.</td></tr>
+        <tr><td><code>halo openclaw apply</code></td>         <td class="muted">Patch OpenClaw so traffic hits Halo. Env vars do not work on OpenClaw.</td></tr>
+        <tr><td><code>halo hermes apply</code></td>           <td class="muted">Patch Hermes <code>config.yaml</code> + <code>.env</code>. Env vars are not enough on Hermes either.</td></tr>
+        <tr><td><code>halo license apply</code></td>          <td class="muted">Paste the Cut/Route token from checkout. Restart <code>halo serve</code>.</td></tr>
       </tbody>
     </table>
   </div>
 
   <!-- ─────── FREE vs PAID ─────── -->
-  <div class="area-heading">Free vs Paid</div>
+  <div class="area-heading">Free / Cut / Route</div>
   <div class="compare">
     <div class="free">
-      <h4><i class="fas fa-code-branch"></i> &nbsp;Free tier (this binary)</h4>
+      <h4><i class="fas fa-code-branch"></i> &nbsp;Free (this binary)</h4>
       <ul>
-        <li>Local budgets, hard-cap kill switch, <code>halo kill</code> — uncapped, always</li>
-        <li>Exact-match cache, semantic cache (capped entries)</li>
-        <li>Compression + Anthropic prompt-cache injection</li>
-        <li>MCP cloak/taint, tamper-evident local audit log</li>
-        <li><code>halo report</code> + the local dashboard, both fully offline</li>
-        <li>Egress allowlist / region-lock, at-rest encryption for cached content</li>
-        <li>AI usage / governance registry export (JSON/CSV, <code>halo registry</code>)</li>
-        <li>Up to 3 registered agents (<code>halo agent add</code>)</li>
-        <li>No account, no telemetry beyond opt-in metadata to your own relay</li>
+        <li>Local budgets, hard-cap kill switch, <code>halo kill</code> — never paywalled</li>
+        <li>Starter denylist (cloud metadata + a few exfil sinks), true on install</li>
+        <li>MCP cloak/taint; uncloaked secrets in tool args are blocked</li>
+        <li><code>halo report</code> + loopback dashboard, 7-day history</li>
+        <li>Stars what Cut would have saved on this install's traffic</li>
+        <li>Up to 3 registered agents</li>
+        <li>No account. Nothing leaves the machine if <code>relay_url</code> is unset</li>
       </ul>
     </div>
     <div class="paid">
-      <h4><i class="fas fa-layer-group"></i> &nbsp;Paid license ($50–100/mo)</h4>
+      <h4><i class="fas fa-layer-group"></i> &nbsp;Cut $50 · Route $100</h4>
       <ul>
-        <li><strong>Unlimited registered agents</strong> — the cap a solo power user hits first</li>
-        <li>Higher semantic-cache entry cap</li>
-        <li>Budget alerting webhooks</li>
-        <li>Best-effort remote kill (pull-based revoke from the relay)</li>
-        <li>Relay multi-seat tokens</li>
-        <li>Hosted per-channel / sub-agent cost drill-down</li>
-        <li>Offline, Ed25519-signed license key — no phone-home, ever</li>
+        <li><strong>Cut</strong> applies cache, compression, prompt-cache injection — that's the bill cut</li>
+        <li>30-day history, unlimited agents, per-agent caps, alerting</li>
+        <li>Optional semantic cache (opt-in; spends a tiny embedding call)</li>
+        <li><strong>Route</strong> is Cut plus failover and task-class routing (cheap GLM lane via <code>routing.by_class</code>)</li>
+        <li>Buy, then <code>halo license apply</code>. Offline Ed25519 key — no phone-home</li>
+        <li>Govern ($250) is not for sale yet</li>
+        <li><a href="https://deploy.langsmart.app/halo/buy/cut" style="color:#5eead4;">Buy Cut</a> · <a href="https://deploy.langsmart.app/halo/buy/route" style="color:#5eead4;">Buy Route</a></li>
       </ul>
     </div>
   </div>
@@ -457,7 +458,7 @@ halo serve</div>
     <thead><tr><th>Capability</th><th class="us">Halo</th><th>LiteLLM proxy</th><th>Hosted gateways (Portkey / Helicone)</th><th>Raw SDK, no proxy</th></tr></thead>
     <tbody>
       <tr><td class="row-label">Local hard-cap kill switch</td><td class="us">Built in, offline-first</td><td class="no">Soft budgets, no offline guarantee</td><td class="no">Depends on their uptime</td><td class="no">None</td></tr>
-      <tr><td class="row-label">Cross-provider semantic cache</td><td class="us">Built in, free (capped)</td><td class="no">Not built in</td><td class="no">Enterprise-tier add-on</td><td class="no">None</td></tr>
+      <tr><td class="row-label">Cross-provider semantic cache</td><td class="us">Cut, opt-in</td><td class="no">Not built in</td><td class="no">Enterprise-tier add-on</td><td class="no">None</td></tr>
       <tr><td class="row-label">MCP secret cloaking</td><td class="us">Built in (Shield-derived)</td><td class="no">Not built in</td><td class="no">Not built in</td><td class="no">None</td></tr>
       <tr><td class="row-label">Provider keys leave your machine</td><td class="us">Never</td><td class="no">Depends on deployment</td><td class="no">Traffic transits their cloud</td><td class="no">N/A</td></tr>
       <tr><td class="row-label">Runs a model to do its job</td><td class="us">Never — zero LLM deps</td><td class="no">No</td><td class="no">No</td><td class="no">N/A</td></tr>
@@ -466,7 +467,7 @@ halo serve</div>
     </tbody>
   </table>
   <div class="feature-body" style="margin-bottom: 8px;">
-    The honest comparison: LiteLLM is a strong, more general routing layer without Halo's local budget/cache/cloak stack baked in; hosted gateways add real observability but put your traffic through their cloud and meter you immediately. Halo is narrower on purpose — one binary, one job, free forever for the self-hoster, with a paid tier that only adds hosted/fleet conveniences on top.
+    The honest comparison: LiteLLM is a stronger general routing layer. Hosted gateways add observability but put traffic through their cloud. Halo is narrower on purpose — one binary, keys on the box, Free is a real firewall, Cut is the bill cut.
   </div>
 
   <!-- ─────── BUILD + LINKS ─────── -->
@@ -480,7 +481,7 @@ halo serve</div>
     <div class="feature-body">Rust 1.75+ stable. Own workspace, lean dependency tree, <code>redb</code>/SQLite single-file stores — no Redis, no Mongo, no Postgres.</div>
 <div class="code-block">cargo build --release
 ./target/release/halo --version
-cargo test --release    <span class="cm"># 119 tests, all green</span></div>
+cargo test --release    <span class="cm"># 153 tests, all green</span></div>
     <div class="feature-body">
       <strong>Public binaries:</strong> <a href="https://github.com/AperionAI/halo-dist/releases" style="color: #5eead4;">github.com/AperionAI/halo-dist/releases</a> &nbsp;·&nbsp;
       <strong>Container:</strong> <code>ghcr.io/aperionai/halo</code> &nbsp;·&nbsp;

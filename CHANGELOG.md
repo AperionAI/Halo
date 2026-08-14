@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.5
+
+Hermes gets the same one-command patch OpenClaw already had. Route can send
+a task class to a cheaper agent (the GLM lane).
+
+### Added
+
+- **`halo hermes apply --agent <id>`.** Writes `~/.hermes/config.yaml`
+  (`providers.halo` + `model.provider`) and upserts the virtual key in
+  `.env`. `--dry-run` prints and writes nothing.
+- **Route task-class routing.** `routing.by_class` maps `chat` /
+  `embedding` / `code` (or `X-Halo-Task-Class`) to another agent whose
+  provider key is used on the wire. `routing.models` optionally rewrites
+  the model (e.g. `code: glm-4.7`). Spend still hits the inbound agent's
+  cap. Failover still applies on the wire agent.
+
 ## 1.6.0
 
 Cut now cuts the bill. Cache, compression, and prompt-cache injection are

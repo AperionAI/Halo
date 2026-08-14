@@ -149,6 +149,17 @@ compression:
 # failover:
 #   researcher: researcher-backup
 
+# Route-tier task-class routing. Spend still hits the inbound agent's cap;
+# the mapped agent's provider/key is what goes on the wire. `code` is the
+# cheap lane: models whose name contains glm / coder / code- classify as
+# `code`, or send X-Halo-Task-Class. Ignored on Free/Cut.
+# routing:
+#   by_class:
+#     code: glm
+#     embedding: embed-mini
+#   models:
+#     code: glm-4.7
+
 # MCP servers Halo fronts. Point your agent runtime's MCP config at Halo
 # (e.g. http://127.0.0.1:8787/mcp/<name>) instead of these servers directly.
 # Halo runs each server internally and applies Shield's cloak + taint at the

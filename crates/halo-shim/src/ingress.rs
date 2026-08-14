@@ -117,6 +117,39 @@ fn extract_vkey(headers: &HeaderMap) -> Option<String> {
     None
 }
 
+/// Optional `X-Halo-Task-Class` override (`chat` / `embedding` / `code`, or
+/// any short token). Header wins over model-name heuristics.
+fn extract_task_class(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-halo-task-class")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 32
+                && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
+}
+
+/// Coarse class for Route `routing.by_class`. Embeddings stay `embedding`.
+/// `glm` in the model name is `code` (the cheap lane). Header wins.
+fn classify_task(kind: ApiKind, model: &str, header: Option<&str>) -> String {
+    if let Some(h) = header {
+        return h.to_string();
+    }
+    if !kind.is_chat() {
+        return kind.task_class().into();
+    }
+    let m = model.to_ascii_lowercase();
+    if m.contains("embed") {
+        return "embedding".into();
+    }
+    if m.contains("glm") || m.contains("code-") || m.contains("coder") {
+        return "code".into();
+    }
+    "chat".into()
+}
+
 /// Optional `X-Halo-Subject` sub-identity for cost attribution. Trimmed,
 /// length-capped (defence against a client stuffing content into it -- this is
 /// metadata, never content), and empty -> `None`.
@@ -189,16 +222,13 @@ struct BackupHop {
     provider: Provider,
     key: String,
     url: String,
+    base_url: Option<String>,
 }
 
-/// Route-tier: one backup agent, no recursive hops. None on Free/Cut or
-/// when the map/key/egress check fails.
-fn route_backup(st: &AppState, agent: &str, kind: ApiKind) -> Option<BackupHop> {
-    if !st.entitlements.has(halo_common::license::feature::ROUTE) {
-        return None;
-    }
-    let backup_id = st.cfg.failover.get(agent)?;
-    if backup_id.is_empty() || backup_id == agent {
+/// Same lookup as failover, without the Route entitlement check. Used by
+/// task-class routing (caller already gated on Route).
+fn lookup_agent_hop(st: &AppState, agent_id: &str, kind: ApiKind) -> Option<BackupHop> {
+    if agent_id.is_empty() {
         return None;
     }
     let rec = st
@@ -206,7 +236,7 @@ fn route_backup(st: &AppState, agent: &str, kind: ApiKind) -> Option<BackupHop> 
         .records()
         .ok()?
         .into_iter()
-        .find(|r| r.agent_id == *backup_id && r.is_active())?;
+        .find(|r| r.agent_id == agent_id && r.is_active())?;
     let key = st.keys.get_secret(&rec.agent_id).ok()?;
     let url = format!(
         "{}{}",
@@ -221,7 +251,19 @@ fn route_backup(st: &AppState, agent: &str, kind: ApiKind) -> Option<BackupHop> 
         provider: rec.provider,
         key,
         url,
+        base_url: rec.base_url,
     })
+}
+
+fn route_backup(st: &AppState, agent: &str, kind: ApiKind) -> Option<BackupHop> {
+    if !st.entitlements.has(halo_common::license::feature::ROUTE) {
+        return None;
+    }
+    let backup_id = st.cfg.failover.get(agent)?;
+    if backup_id.is_empty() || backup_id == agent {
+        return None;
+    }
+    lookup_agent_hop(st, backup_id, kind)
 }
 
 async fn send_upstream(
@@ -278,12 +320,11 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         );
     }
     let mut provider = record.provider;
-    let provider_str = provider.as_str();
     // Optional sub-identity hint (channel/sub-agent/thread) for cost
     // attribution when one process/key fans out across many channels.
     let subject = extract_subject(&headers);
     let original: Option<Value> = serde_json::from_str(&body).ok();
-    let model = original
+    let mut model = original
         .as_ref()
         .and_then(|j| j.get("model").and_then(|m| m.as_str()))
         .unwrap_or_default()
@@ -294,12 +335,42 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             .map(streaming::wants_stream)
             .unwrap_or(false);
 
-    // 2. Compression (chat only). Cut applies it to the wire. Free still
-    // computes the ratio so the dashboard can star "Cut would have saved".
+    let task_class = classify_task(kind, &model, extract_task_class(&headers).as_deref());
+    let mut wire_agent = agent.clone();
+    let mut wire_base_url = record.base_url.clone();
+    let mut outbound_body = body.clone();
+    if st.entitlements.has(halo_common::license::feature::ROUTE) {
+        if let Some(target) = st.cfg.routing.by_class.get(&task_class) {
+            if target != &agent {
+                if let Some(hop) = lookup_agent_hop(&st, target, kind) {
+                    st.audit(serde_json::json!({
+                        "kind": "route_class",
+                        "class": task_class,
+                        "from_agent": agent,
+                        "to_agent": hop.agent_id,
+                    }));
+                    provider = hop.provider;
+                    wire_agent = hop.agent_id;
+                    wire_base_url = hop.base_url;
+                }
+            }
+        }
+        if let Some(rewrite) = st.cfg.routing.models.get(&task_class) {
+            if rewrite != &model {
+                if let Ok(mut j) = serde_json::from_str::<Value>(&outbound_body) {
+                    j["model"] = serde_json::json!(rewrite);
+                    outbound_body = j.to_string();
+                }
+                model = rewrite.clone();
+            }
+        }
+    }
+    let provider_str = provider.as_str();
     let cut = st.entitlements.has(halo_common::license::feature::CUT);
     let mut compression_ratio = 1.0f64;
     let mut shadow_savings = 0.0f64;
-    let mut outbound = body.clone();
+    let mut outbound = outbound_body;
+    let cache_src = outbound.clone();
     if kind.is_chat() {
         let c = compress::compress_body(
             &outbound,
@@ -346,7 +417,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
     // independent of the `stream` flag (see `cachekey::request_cache_key`),
     // so a hit here can come from either a prior streamed or buffered call.
     let cache_key = if kind.is_chat() {
-        cachekey::request_cache_key(provider_str, &body)
+        cachekey::request_cache_key(provider_str, &cache_src)
     } else {
         None
     };
@@ -388,7 +459,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
                         tokens_in: entry.tokens_in,
                         tokens_out: entry.tokens_out,
                         tokens_cached: 0,
-                        task_class: kind.task_class().into(),
+                        task_class: task_class.clone(),
                         latency_ms: 0,
                         compression_ratio: 1.0,
                         decision: PolicyDecision::CacheHit,
@@ -447,7 +518,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             tokens_in: 0,
             tokens_out: 0,
             tokens_cached: 0,
-            task_class: kind.task_class().into(),
+            task_class: task_class.clone(),
             latency_ms: 0,
             compression_ratio,
             decision: PolicyDecision::BudgetBlocked,
@@ -527,7 +598,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
                                 tokens_in,
                                 tokens_out: entry.tokens_out,
                                 tokens_cached: 0,
-                                task_class: kind.task_class().into(),
+                                task_class: task_class.clone(),
                                 latency_ms: embed_started.elapsed().as_millis() as u64,
                                 compression_ratio,
                                 decision: PolicyDecision::SemanticCacheHit,
@@ -580,11 +651,11 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
     }
 
     // 5. Forward to the real provider with the real key.
-    let real_key = match st.keys.get_secret(&agent) {
+    let real_key = match st.keys.get_secret(&wire_agent) {
         Ok(k) => k,
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
-    let base = provider_base(provider, record.base_url.as_deref());
+    let base = provider_base(provider, wire_base_url.as_deref());
     let url = format!("{base}{}", kind.upstream_path());
     if let Err(denied_host) = crate::egress::check_egress(&st.cfg.egress, &url) {
         st.finalize_llm_call(LlmOutcome {
@@ -595,7 +666,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             tokens_in: 0,
             tokens_out: 0,
             tokens_cached: 0,
-            task_class: kind.task_class().into(),
+            task_class: task_class.clone(),
             latency_ms: 0,
             compression_ratio,
             decision: PolicyDecision::EgressDenied,
@@ -619,12 +690,12 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
     let mut resp = match send_upstream(&st, &headers, provider, &real_key, &url, &outbound).await {
         Ok(r) => r,
         Err(e) => {
-            if let Some(fb) = route_backup(&st, &agent, kind) {
+            if let Some(fb) = route_backup(&st, &wire_agent, kind) {
                 match send_upstream(&st, &headers, fb.provider, &fb.key, &fb.url, &outbound).await {
                     Ok(r2) => {
                         st.audit(serde_json::json!({
                             "kind": "failover",
-                            "from_agent": agent,
+                            "from_agent": wire_agent,
                             "to_agent": fb.agent_id,
                             "reason": if e.is_timeout() { "timeout" } else { "transport" },
                         }));
@@ -641,7 +712,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
                             tokens_in: 0,
                             tokens_out: 0,
                             tokens_cached: 0,
-                            task_class: kind.task_class().into(),
+                            task_class: task_class.clone(),
                             latency_ms: started.elapsed().as_millis() as u64,
                             compression_ratio,
                             decision: PolicyDecision::Allow,
@@ -668,7 +739,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
                     tokens_in: 0,
                     tokens_out: 0,
                     tokens_cached: 0,
-                    task_class: kind.task_class().into(),
+                    task_class: task_class.clone(),
                     latency_ms: started.elapsed().as_millis() as u64,
                     compression_ratio,
                     decision: PolicyDecision::Allow,
@@ -685,12 +756,12 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
     };
 
     if failover_status(resp.status()) {
-        if let Some(fb) = route_backup(&st, &agent, kind) {
+        if let Some(fb) = route_backup(&st, &wire_agent, kind) {
             match send_upstream(&st, &headers, fb.provider, &fb.key, &fb.url, &outbound).await {
                 Ok(r2) => {
                     st.audit(serde_json::json!({
                         "kind": "failover",
-                        "from_agent": agent,
+                        "from_agent": wire_agent,
                         "to_agent": fb.agent_id,
                         "reason": format!("http_{}", resp.status().as_u16()),
                     }));
@@ -715,7 +786,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
             subject,
             provider,
             model,
-            kind.task_class().to_string(),
+            task_class.clone(),
             compression_ratio,
             soft_warned,
             caps,
@@ -768,7 +839,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         tokens_in,
         tokens_out,
         tokens_cached,
-        task_class: kind.task_class().into(),
+        task_class: task_class.clone(),
         latency_ms,
         compression_ratio,
         decision,
@@ -1018,5 +1089,39 @@ async fn mcp_proxy(
                 error_response(StatusCode::BAD_GATEWAY, &format!("MCP error: {e}"))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::*;
+
+    #[test]
+    fn embeddings_endpoint_is_embedding() {
+        assert_eq!(
+            classify_task(ApiKind::OpenAiEmbeddings, "text-embedding-3-small", None),
+            "embedding"
+        );
+    }
+
+    #[test]
+    fn glm_model_is_code() {
+        assert_eq!(classify_task(ApiKind::OpenAiChat, "glm-4.7", None), "code");
+    }
+
+    #[test]
+    fn header_wins_over_model() {
+        assert_eq!(
+            classify_task(ApiKind::OpenAiChat, "glm-4.7", Some("chat")),
+            "chat"
+        );
+    }
+
+    #[test]
+    fn default_chat() {
+        assert_eq!(
+            classify_task(ApiKind::AnthropicMessages, "claude-sonnet-4-5", None),
+            "chat"
+        );
     }
 }

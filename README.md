@@ -110,6 +110,10 @@ Running the OpenClaw Gateway? Those env vars **do not work for OpenClaw**. After
 `halo agent add`, run `halo openclaw apply --agent <name>` and restart the
 gateway. See [`docs/OPENCLAW_INTEGRATION.md`](docs/OPENCLAW_INTEGRATION.md).
 
+Nous Hermes Agent keeps the endpoint in `~/.hermes/config.yaml`, not process
+env. Same idea: `halo hermes apply --agent <name>`, then restart Hermes. See
+[`docs/HERMES_INTEGRATION.md`](docs/HERMES_INTEGRATION.md).
+
 Any OpenAI-compatible third party (Groq, Together, Fireworks, a local
 vLLM/Ollama server) works too — add `--base-url` to `agent add`:
 
@@ -366,9 +370,11 @@ compression, Anthropic `cache_control` injection, semantic cache (opt-in),
 per-agent caps, alerting, 30-day history, unlimited agents. Free still
 writes the exact-match cache so it can star what Cut would have saved.
 
-Route ($100) is Cut plus failover: `failover:` in `config.yaml` maps an
-agent to a backup agent; on transport error or 502/503/504/529 Halo retries
-once with the backup provider/key.
+Route ($100) is Cut plus failover and task-class routing. `failover:` maps an
+agent to a backup; on transport error or 502/503/504/529 Halo retries once
+with the backup provider/key. `routing.by_class` sends a class (`chat` /
+`embedding` / `code`, or `X-Halo-Task-Class`) to a cheaper agent's provider
+on the wire. Spend still hits the inbound agent's cap.
 
 Two things scale with a **paid license** (an offline, Ed25519-signed key — no
 phone-home, verified against a public key baked into the binary): how big
@@ -385,6 +391,7 @@ you're running more than one:
 | Semantic cache | — | opt-in | opt-in |
 | Per-agent caps, budget alerting webhooks | — | yes | yes |
 | Failover (`failover:` agent → backup) | — | — | yes |
+| Task-class routing (`routing.by_class`) | — | — | yes |
 | Best-effort remote kill (pull from relay) | — | — | — |
 
 The 3-agent cap is the other non-fleet reason to upgrade besides history and

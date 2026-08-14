@@ -12,6 +12,7 @@ mod config;
 mod dashboard;
 mod egress;
 mod embeddings;
+mod hermes;
 mod ingress;
 mod keys;
 mod mcp;
@@ -105,6 +106,29 @@ enum Cmd {
     Openclaw {
         #[command(subcommand)]
         action: OpenclawCmd,
+    },
+    /// Point Nous Hermes Agent at this Halo install. Writes
+    /// ~/.hermes/config.yaml + .env (Hermes ignores process env for the
+    /// endpoint). See docs/HERMES_INTEGRATION.md.
+    Hermes {
+        #[command(subcommand)]
+        action: HermesCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum HermesCmd {
+    /// Patch Hermes config + .env so traffic goes through Halo.
+    Apply {
+        /// Halo agent id from `halo agent add`.
+        #[arg(long)]
+        agent: String,
+        /// Hermes home directory. Defaults to ~/.hermes.
+        #[arg(long)]
+        home: Option<std::path::PathBuf>,
+        /// Print the patched files and do not write.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -291,6 +315,7 @@ async fn main() -> Result<()> {
         Cmd::Registry { action } => registry_cmd(paths, action),
         Cmd::Service { action } => service_cmd(action),
         Cmd::Openclaw { action } => openclaw_cmd(paths, action),
+        Cmd::Hermes { action } => hermes_cmd(paths, action),
     }
 }
 
@@ -353,6 +378,50 @@ fn openclaw_cmd(paths: Paths, action: OpenclawCmd) -> Result<()> {
                 println!("{}", result.config_out);
                 println!("dry-run: would write {}", result.auth.display());
                 println!("{}", result.auth_out);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn hermes_cmd(paths: Paths, action: HermesCmd) -> Result<()> {
+    match action {
+        HermesCmd::Apply {
+            agent,
+            home,
+            dry_run,
+        } => {
+            let cfg = Config::load(&paths.config())?;
+            let ks = keys::KeyStore::new(paths);
+            let rec = ks
+                .records()?
+                .into_iter()
+                .find(|r| r.agent_id == agent && r.is_active())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no active Halo agent '{agent}'. Register one first: \
+                         `halo agent add {agent} --provider openai` (or anthropic)"
+                    )
+                })?;
+            let home = match home {
+                Some(h) => h,
+                None => dirs::home_dir()
+                    .ok_or_else(|| anyhow::anyhow!("cannot resolve $HOME"))?
+                    .join(".hermes"),
+            };
+            let hp = hermes::HermesPaths::resolve(home);
+            let base_url = format!("http://{}", cfg.listen);
+            let result = hermes::apply(&hp, &base_url, &rec.virtual_key, rec.provider, dry_run)?;
+            if result.wrote {
+                println!("Patched Hermes to use Halo at {base_url}.");
+                println!("  {}", result.config.display());
+                println!("  {}", result.env.display());
+                println!("Restart Hermes, then send one message and run `halo report`.");
+            } else {
+                println!("dry-run: would write {}", result.config.display());
+                println!("{}", result.config_out);
+                println!("dry-run: would write {}", result.env.display());
+                println!("{}", result.env_out);
             }
         }
     }
