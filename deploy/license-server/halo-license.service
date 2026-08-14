@@ -1,0 +1,18 @@
+[Unit]
+Description=Halo Stripe license fulfillment
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/halo-license
+Environment=HALO_LICENSE_ENV=/opt/halo-license/.env
+ExecStart=/opt/halo-license/venv/bin/python /opt/halo-license/server.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=halo-license
+
+[Install]
+WantedBy=multi-user.target

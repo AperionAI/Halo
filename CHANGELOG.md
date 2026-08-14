@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.5.0
+
+Stripe checkout is live for Cut (Route uses the same path). After you pay,
+`halo license apply` writes the key — no YAML hunting.
+
+- **Checkout pages** match docs.aperion.ai (dark nav, same tokens). Buy is a
+  branded landing, then Stripe; thanks shows the token plus `halo license apply`.
+- **`halo license apply [TOKEN]`** writes `license.key` (0600) and points
+  `license_key` at it. Token from argv, a file path, or stdin.
+- **Renewals.** `invoice.paid` with `subscription_cycle` mints a fresh window.
+  First payment still comes from Checkout so we don't double-issue.
+- Optional Postmark (`POSTMARK_SERVER_TOKEN` + `POSTMARK_FROM`) emails the
+  token. Thanks page works without it.
+
+Govern is still refused. Production keys need the production signing seed on
+the license box so they verify without `HALO_LICENSE_PUBKEY`.
+
 ## 1.4.1
 
 Operator nits from the 1.4.0 smoke. Same Free firewall as 1.4.0.

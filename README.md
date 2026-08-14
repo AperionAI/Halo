@@ -379,18 +379,20 @@ The 3-agent cap is the one non-fleet reason to upgrade besides history.
 Hitting it doesn't break anything already running: `halo agent add` just
 refuses to mint a 4th virtual key until you revoke one or license up.
 
-Paid is Cut ($50), Route ($100), or Govern ($250). Paste `license_key` into
-`~/.halo/config.yaml`. Stripe checkout is not in this binary yet.
+Paid is Cut ($50) or Route ($100). Govern ($250) is not for sale yet.
 
 ```bash
-halo license show          # current tier, features, expiry
+# https://deploy.langsmart.app/halo/buy/cut
+# https://deploy.langsmart.app/halo/buy/route
+halo license apply         # paste the token from the thanks page
+halo license show
 ```
 
-Set `license_key` (the token, or a path to a file holding it) in
-`~/.halo/config.yaml`. A missing, invalid, or expired key silently resolves to
-the free tier — it never blocks startup. The relay reads its own license from
-`HALO_RELAY_LICENSE` to gate multi-seat tokens (`HALO_RELAY_TOKENS`) and the
-per-subject drill-down.
+`halo license apply` writes `~/.halo/license.key` and points `config.yaml` at
+it. A missing, invalid, or expired key silently resolves to the free tier —
+it never blocks startup. Restart `halo serve` if it is already running. The
+relay reads its own license from `HALO_RELAY_LICENSE` to gate multi-seat
+tokens (`HALO_RELAY_TOKENS`) and the per-subject drill-down.
 
 ## License
 

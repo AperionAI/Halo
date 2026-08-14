@@ -31,7 +31,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{Config, Paths};
 use halo_common::telemetry::Provider;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::sync::{Arc, Mutex};
 
 #[derive(Parser)]
@@ -75,7 +75,7 @@ enum Cmd {
         #[command(subcommand)]
         action: EmbeddingsCmd,
     },
-    /// Show or issue license entitlements.
+    /// Show or apply a license (Cut/Route). `issue` is Aperion-internal.
     License {
         #[command(subcommand)]
         action: LicenseCmd,
@@ -180,6 +180,11 @@ enum DashboardCmd {
 enum LicenseCmd {
     /// Show the currently active tier, features, and expiry.
     Show,
+    /// Save a license token into this install (writes `license.key` +
+    /// `license_key` in config.yaml). Token from argv, else stdin.
+    Apply {
+        token: Option<String>,
+    },
     /// Issuer-only: mint a signed license key (Aperion internal). Requires the
     /// signing key -- the same 32-byte Ed25519 seed spec compass uses:
     /// `file:<path>`, `env:<VAR>`, `base64:<...>`, `hex:<...>`, or a bare
@@ -419,6 +424,7 @@ fn license_cmd(paths: Paths, action: LicenseCmd) -> Result<()> {
             let cfg = Config::load(&paths.config())?;
             let ent = cfg.entitlements();
             println!("Smartflow Halo -- license");
+            println!("Data dir: {}", paths.base.display());
             println!("Ladder:   {}", ent.ladder().as_str());
             println!("Tier:     {}", ent.tier_label);
             println!("Status:   {}", ent.status.label());
@@ -437,10 +443,28 @@ fn license_cmd(paths: Paths, action: LicenseCmd) -> Result<()> {
                 println!(
                     "\nFree is the firewall (caps, kill switch, denylist, 7-day history).\n\
                      Cache and compression stay on so the savings number is real.\n\
-                     Cut ($50/mo) unlocks 30-day history. Paste a license key into\n\
-                     `license_key` in ~/.halo/config.yaml. Stripe checkout is the next slice."
+                     Cut ($50/mo):  https://deploy.langsmart.app/halo/buy/cut\n\
+                     Route ($100/mo): https://deploy.langsmart.app/halo/buy/route\n\
+                     After checkout: `halo license apply` (paste the token), then `halo license show`."
                 );
             }
+        }
+        LicenseCmd::Apply { token } => {
+            let raw = match token {
+                Some(t) => t,
+                None => {
+                    if std::io::stdin().is_terminal() {
+                        eprint!("Paste the license token, then Enter: ");
+                        let _ = std::io::stderr().flush();
+                    }
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line)?;
+                    line
+                }
+            };
+            let path = Config::apply_license_token(&paths, &raw)?;
+            println!("Saved license to {}", path.display());
+            license_cmd(paths, LicenseCmd::Show)?;
         }
         LicenseCmd::Issue {
             org,
@@ -469,7 +493,7 @@ fn license_cmd(paths: Paths, action: LicenseCmd) -> Result<()> {
             println!("{key}");
             eprintln!(
                 "\nissued for '{}' ({}), {} feature(s), expires in {} days.\n\
-                 Paste this into `license_key` in the customer's ~/.halo/config.yaml.",
+                 Customer runs: `halo license apply` and pastes the token.",
                 claims.org,
                 claims.tier,
                 claims.features.len(),
@@ -556,8 +580,8 @@ fn check_agent_cap(active_count: usize, entitlements: &halo_common::Entitlements
     if active_count >= limit {
         anyhow::bail!(
             "free tier is limited to {limit} registered agents (you have {active_count}). \
-             Revoke one with `halo agent revoke <name>`, or set `license_key` in \
-             ~/.halo/config.yaml to lift the cap (`multi_agent_unlimited`)."
+             Revoke one with `halo agent revoke <name>`, or `halo license apply` \
+             a Cut/Route key to lift the cap (`multi_agent_unlimited`)."
         );
     }
     Ok(())

@@ -478,6 +478,8 @@ const HTML: &str = r#"<!doctype html>
     <div class="label">Your traffic, this window</div>
     <div class="value" id="upgradeLine">—</div>
     <div class="hint" id="upgradeHint" style="margin:8px 0 0"></div>
+    <p style="margin:10px 0 0"><a id="upgradeBuy" href="https://deploy.langsmart.app/halo/buy/cut">Buy Cut — $50/mo</a>
+      · <a href="https://deploy.langsmart.app/halo/buy/route">Buy Route — $100/mo</a></p>
   </div>
   <div class="cards">
     <div class="card savings"><div class="label">Estimated saved</div><div class="value" id="saved">—</div></div>
@@ -556,7 +558,7 @@ async function load() {
       'Would have cost ' + usd(up.would_have_usd) + ' · Halo saved ' + usd(up.saved_usd);
     document.getElementById('upgradeHint').textContent =
       'Cut is $' + up.price_usd + '/mo and unlocks ' + up.history_days +
-      '-day history. Paste a license key into Settings (license_key in ~/.halo/config.yaml).';
+      '-day history. After checkout: halo license apply (paste the token), then halo license show.';
   } else {
     card.style.display = 'none';
   }

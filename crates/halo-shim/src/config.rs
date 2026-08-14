@@ -545,6 +545,22 @@ impl Config {
         halo_common::Entitlements::from_license_key(key.as_deref())
     }
 
+    /// Write a signed license token to `license.key` (0600) and point
+    /// `license_key` in config.yaml at that file. `raw` may be the token
+    /// itself or a path to a file holding it.
+    pub fn apply_license_token(paths: &Paths, raw: &str) -> anyhow::Result<std::path::PathBuf> {
+        let token = resolve_license_token(raw)?;
+        paths.ensure()?;
+        let key_path = paths.base.join("license.key");
+        crate::util::atomic_write_0600(&key_path, format!("{token}\n").as_bytes())?;
+        let cfg_path = paths.config();
+        let mut cfg = Self::load_or_materialize(&cfg_path)?;
+        cfg.license_key = Some(key_path.to_string_lossy().into_owned());
+        let yaml = serde_yaml::to_string(&cfg)?;
+        crate::util::atomic_write_0600(&cfg_path, yaml.as_bytes())?;
+        Ok(key_path)
+    }
+
     /// Build the effective price table: built-in defaults with
     /// `price_overrides` applied on top. Shared by `serve` (live billing)
     /// and `report`/`status` (offline recompute) so both use identically
@@ -563,6 +579,23 @@ impl Config {
         }
         prices
     }
+}
+
+fn resolve_license_token(raw: &str) -> anyhow::Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("empty license token");
+    }
+    let path = Path::new(trimmed);
+    if path.is_file() {
+        let contents = std::fs::read_to_string(path)?;
+        let token = contents.trim();
+        if token.is_empty() {
+            anyhow::bail!("license file is empty: {}", path.display());
+        }
+        return Ok(token.to_string());
+    }
+    Ok(trimmed.to_string())
 }
 
 #[cfg(test)]
@@ -689,5 +722,35 @@ mod tests {
         let second = Config::load_or_materialize(&path).unwrap();
         assert_eq!(second.budget.hard_cap_usd, Some(9.0));
         assert_eq!(second.budget.soft_cap_usd, None);
+    }
+
+    #[test]
+    fn apply_license_token_writes_key_file_and_config_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let paths = Paths {
+            base: dir.path().to_path_buf(),
+        };
+        let token = "halo.test-token-not-real";
+        let key_path = Config::apply_license_token(&paths, token).unwrap();
+        assert_eq!(key_path, paths.base.join("license.key"));
+        assert_eq!(std::fs::read_to_string(&key_path).unwrap().trim(), token);
+        let cfg = Config::load(&paths.config()).unwrap();
+        assert_eq!(
+            cfg.license_key.as_deref(),
+            Some(key_path.to_str().unwrap())
+        );
+        assert_eq!(cfg.budget.hard_cap_usd, Some(50.0));
+    }
+
+    #[test]
+    fn apply_license_token_reads_from_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let src = dir.path().join("from-checkout.txt");
+        std::fs::write(&src, "  token-from-file  \n").unwrap();
+        let paths = Paths {
+            base: dir.path().join("halo-home"),
+        };
+        let key_path = Config::apply_license_token(&paths, src.to_str().unwrap()).unwrap();
+        assert_eq!(std::fs::read_to_string(&key_path).unwrap().trim(), "token-from-file");
     }
 }
