@@ -3,6 +3,11 @@
 Halo's **source is closed**, but its artifacts are public, so users install with
 no GitHub access and no auth. There are three delivery channels; pick one.
 
+The first `halo` command writes `~/.halo/config.yaml` with a $25/$50 24h spend
+cap and a starter egress denylist (cloud metadata + a few exfil sinks). That's
+the first-run firewall. Raise the cap or add deny hosts in that file. Leave
+`relay_url` unset and nothing is uploaded; the loopback dashboard is enough.
+
 ---
 
 ## 1. Docker image (recommended — nothing to build)
@@ -33,7 +38,7 @@ Downloads the matching prebuilt tarball, verifies its SHA-256, and drops `halo`
 + `halo-relay` onto your PATH. Pin a version or relocate:
 
 ```bash
-HALO_VERSION=halo-v1.3.3 HALO_INSTALL_DIR=~/.local/bin \
+HALO_VERSION=halo-v1.4.0 HALO_INSTALL_DIR=~/.local/bin \
   curl -fsSL https://halo-get.aperion.ai | sh
 ```
 

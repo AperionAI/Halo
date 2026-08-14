@@ -36,19 +36,15 @@ listen: "127.0.0.1:8787"
 # ("alerting"); ignored on the free tier.
 # alert_webhook: "https://hooks.example.com/halo-budget"
 
-# Outbound egress allowlist / region-lock. Empty (default, commented out) =
-# unrestricted, today's behavior -- nothing below changes anything unless you
-# uncomment it. When set, every egress Halo itself initiates -- the LLM
-# provider, the embeddings API, and the relay telemetry upload -- is checked
-# against this list *before the request leaves the process* and hard-denied
-# (with an audit event) if the host isn't on it. Entries are host names only
-# (no scheme/port/path), matched case-insensitively; a leading `.` matches
-# any subdomain (and the apex) of that suffix. This is a real proxy-side
-# control, not just a log line: even a fully automated or prompt-injected
-# agent cannot make Halo reach a host that isn't listed here.
+# Outbound egress. A starter denylist always applies (cloud metadata + a few
+# paste/exfil sinks) even if you leave this commented out. Extra denies go
+# under denied_upstreams; empty extras do not open metadata.
+# allowed_upstreams is opt-in: empty = any non-denied host.
 #
 # Worked example -- an Anthropic-only box that also reports to your own relay:
 # egress:
+#   denied_upstreams:
+#     - "evil.example.com"
 #   allowed_upstreams:
 #     - "api.anthropic.com"
 #     - ".yourcompany.com"      # matches relay.yourcompany.com, etc.
@@ -63,12 +59,13 @@ listen: "127.0.0.1:8787"
 # encrypt_at_rest: false
 
 budget:
-  # Rolling window the caps apply over.
+  # Rolling window the caps apply over. Fresh installs materialize $25 soft /
+  # $50 hard (the kill switch) so a runaway is refused without YAML hunting.
   window_hours: 24
   # Global caps across all agents. soft = warn but keep serving; hard = the
   # kill switch (refuse locally, always, even if the relay was never up).
-  soft_cap_usd: 50.0
-  hard_cap_usd: 100.0
+  soft_cap_usd: 25.0
+  hard_cap_usd: 50.0
   # Optional per-agent overrides (win over the global caps for that agent).
   per_agent:
     - agent_id: "researcher"

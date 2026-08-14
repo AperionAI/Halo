@@ -4,16 +4,22 @@ A lightweight, standalone governance proxy for **self-hosted AI agents**. Halo
 sits between your agent runtime and the model providers (and your MCP servers),
 so you can:
 
-- **See the bill** — per-agent, per-model spend and a real COGS/savings number,
+- **See the bill** — per-agent, per-model, per-task spend and a real COGS/savings number,
   split into what came from Halo's own cache vs. a baseline that holds even
   when that cache never hits (see "Compression & provider prompt-cache" below).
 - **Cut the obvious waste** — exact-match response cache + prompt compression.
 - **Never get a runaway invoice** — local token/spend budgets with a hard-cap
-  kill switch that works even fully offline.
+  kill switch that works even fully offline. A fresh install arms $25 soft /
+  $50 hard per 24h so you don't have to hunt YAML first.
 - **Keep secrets out of the model** — reversible cloaking + secret-shape
   detection at the MCP seam (reused from [Aperion Shield](https://github.com/AperionAI/shield)).
 - **Prove it** — a tamper-evident, hash-chained local audit log and a
   metadata-only savings dashboard.
+
+With `relay_url` unset (the default), **nothing leaves the machine** except the
+provider calls you already make. Budgets, cache, the denylist, `halo report`,
+and the loopback dashboard all work offline. The hosted relay is optional and
+not part of Free.
 
 It is deliberately **light**: its own Rust workspace, a lean dependency tree,
 `redb`/SQLite single-file stores (no Redis, no Mongo, no Postgres), and **no
@@ -29,9 +35,11 @@ model. Same posture as `shield-standalone` and `compass-standalone`.
   keychain is unreachable without a GUI login session (e.g. over SSH/sudo on an
   always-on agent box) -- see [`docs/HEADLESS.md`](docs/HEADLESS.md) for the
   encrypted-file vault path, which is the normal setup for a self-hosted box.
-- **The relay receives metadata only** — token counts, model, cost, cache-hit
-  flag. Never prompts, responses, tool arguments, or vectors. Model traffic
-  never transits the relay. The full schema is published in
+- **The relay is optional.** Leave `relay_url` unset and Halo stays local-only:
+  token counts, model, cost, and cache-hit flags never leave the box. If you
+  do point a relay, it receives metadata only — never prompts, responses, tool
+  arguments, or vectors. Model traffic never transits the relay. The full
+  schema is published in
   [`docs/TELEMETRY_SCHEMA.md`](docs/TELEMETRY_SCHEMA.md).
 
 ## Layout
@@ -97,11 +105,9 @@ than leaving `halo serve` in a terminal.
 Anthropic works the same way (`--provider anthropic`, then set
 `ANTHROPIC_API_KEY` to the virtual key and `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`).
 
-Running the OpenClaw Gateway? Those env vars **do not work for OpenClaw** -- it
-ignores the process environment on service installs and reads its key/endpoint
-from its own config + auth store. See
-[`docs/OPENCLAW_INTEGRATION.md`](docs/OPENCLAW_INTEGRATION.md) for the config-patch
-recipe, the SSRF/`models`-array gotchas, and the `lsof` verification.
+Running the OpenClaw Gateway? Those env vars **do not work for OpenClaw**. After
+`halo agent add`, run `halo openclaw apply --agent <name>` and restart the
+gateway. See [`docs/OPENCLAW_INTEGRATION.md`](docs/OPENCLAW_INTEGRATION.md).
 
 Any OpenAI-compatible third party (Groq, Together, Fireworks, a local
 vLLM/Ollama server) works too — add `--base-url` to `agent add`:
@@ -119,6 +125,7 @@ not buffered — see `docs/DESIGN_REVIEW.md` for why that matters.
 ```bash
 halo status      # live spend by agent, current caps
 halo report      # local COGS/savings view — works fully offline
+halo report --format json --out savings.json
 ```
 
 ### Local dashboard (free, on by default)
@@ -250,18 +257,22 @@ How it stays safe and cheap rather than a source of wrong or stale answers:
 On the free tier `max_entries` is capped (a paid license with
 `semantic_cache_unlimited` lifts it); the cache still works either way.
 
-### The relay (optional)
+### The relay (optional, not Free)
+
+Leave `relay_url` unset and nothing is uploaded. Budgets, cache, `halo report`,
+and the loopback dashboard at `http://127.0.0.1:8788` cover the local box.
+
+If you later want a hosted multi-device view:
 
 ```bash
 HALO_RELAY_TOKEN=some-shared-token halo-relay --bind 127.0.0.1:8080
 # open http://127.0.0.1:8080 for the savings dashboard
 ```
 
-Then set `relay_url` + `relay_token` in `~/.halo/config.yaml`. Without a relay,
-Halo is fully functional locally; only the hosted dashboard is unavailable.
+Then set `relay_url` + `relay_token` in `~/.halo/config.yaml`.
 
-The dashboard also has a **remote-kill** panel: revoke an agent fleet-wide or
-per-device and every shim refuses it on its next poll (~30s). This is a
+The hosted dashboard also has a **remote-kill** panel: revoke an agent fleet-wide
+or per-device and every shim refuses it on its next poll (~30s). This is a
 best-effort backstop only — each shim's local hard-cap kill switch and
 `halo kill` work with zero network and are never gated.
 
@@ -273,26 +284,26 @@ outbound call (`<channel>:<thread-or-user-id>`). Halo records it as metadata
 (never content) and rolls up spend/savings "by subject" in `halo report`. The
 relay's hosted per-subject drill-down is a paid feature (see below).
 
-### Egress allowlist / region-lock (off by default)
+### Egress denylist (on by default) + allowlist (opt-in)
 
 Every egress Halo itself initiates — the LLM provider, the embeddings API,
-and the relay telemetry upload — can be constrained to a fixed set of hosts.
-This is a hard, proxy-side control, not a log line: a request to a host not
-on the list is denied *before it leaves the process*, with an audit event and
-a clear error back to the agent. Even a fully automated, or prompt-injected,
-agent cannot make Halo reach an endpoint you haven't approved.
+and the relay telemetry upload — is checked before the request leaves the
+process. A starter denylist always applies (cloud metadata hosts, link-local
+metadata IPs, a few paste/exfil sinks). `api.openai.com` and `api.anthropic.com`
+are never on that list. Deny wins over any allowlist.
 
 ```yaml
 egress:
+  denied_upstreams:
+    - "evil.example.com"     # extra denies on top of the starter list
   allowed_upstreams:
     - "api.anthropic.com"
-    - ".yourcompany.com"   # leading "." matches any subdomain (and the apex)
+    - ".yourcompany.com"     # leading "." matches any subdomain (and the apex)
 ```
 
-Empty/absent (the default) is unrestricted — nothing changes for an existing
-install until you opt in. See `docs/DESIGN_REVIEW.md` for the fail-closed
-semantics and why the embeddings path in particular fails closed (it's the
-one place raw prompt text would otherwise reach a third party).
+Empty extras do not disable the starter list. Empty `allowed_upstreams` still
+allows any host that isn't denied. See `docs/DESIGN_REVIEW.md` for the
+fail-closed semantics.
 
 ### At-rest encryption for cached content (off by default)
 
@@ -354,23 +365,22 @@ you're running more than one:
 
 | Feature | Free | Paid |
 |---|---|---|
-| Local budgets, hard-cap kill switch, `halo kill` | ✅ | ✅ |
-| Exact-match cache, compression, prompt-cache injection | ✅ | ✅ |
-| MCP cloak/taint, local audit log, `halo report` | ✅ | ✅ |
-| Egress allowlist / region-lock, at-rest encryption | ✅ | ✅ |
-| AI usage registry export (JSON/CSV, `halo registry`) | ✅ | ✅ |
-| Registered agents (`halo agent add`) | 3 | ✅ unlimited |
-| Semantic cache | ✅ (capped entries) | ✅ (raised cap) |
-| Budget alerting webhooks | — | ✅ |
-| Best-effort remote kill (pull from relay) | — | ✅ |
-| Relay multi-seat tokens | — | ✅ |
-| Hosted per-subject cost drill-down | — | ✅ |
+| Local budgets, hard-cap kill switch, `halo kill` | yes | yes |
+| Exact-match cache, compression, prompt-cache injection | yes | yes |
+| MCP cloak/taint, local audit log, `halo report` | yes | yes |
+| Egress denylist + allowlist, at-rest encryption | yes | yes |
+| Local history window | 7 days | Cut 30 / Route 90 |
+| Registered agents (`halo agent add`) | 3 | unlimited |
+| Semantic cache | capped entries | raised cap |
+| Budget alerting webhooks | — | yes |
+| Best-effort remote kill (pull from relay) | — | yes |
 
-The 3-agent cap is the one non-fleet reason to upgrade — a solo power user
-running a researcher, a coder, and a reviewer agent off one Halo install hits
-it well before ever caring about remote-kill or multi-seat. Hitting it doesn't
-break anything already running: `halo agent add` just refuses to mint a
-*4th* virtual key until you revoke one or license up.
+The 3-agent cap is the one non-fleet reason to upgrade besides history.
+Hitting it doesn't break anything already running: `halo agent add` just
+refuses to mint a 4th virtual key until you revoke one or license up.
+
+Paid is Cut ($50), Route ($100), or Govern ($250). Paste `license_key` into
+`~/.halo/config.yaml`. Stripe checkout is not in this binary yet.
 
 ```bash
 halo license show          # current tier, features, expiry

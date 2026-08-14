@@ -12,7 +12,7 @@ pub mod pricing;
 pub mod telemetry;
 pub mod vkey;
 
-pub use license::{feature, Entitlements, LicenseClaims, LicenseStatus, Tier};
+pub use license::{feature, Entitlements, Ladder, LicenseClaims, LicenseStatus, Tier};
 pub use pricing::{estimate_cost_usd, ModelPrice, PriceTable};
 pub use telemetry::{PolicyDecision, Provider, TelemetryBatch, TelemetryEvent};
 pub use vkey::{parse_virtual_key, VirtualKeyRecord};

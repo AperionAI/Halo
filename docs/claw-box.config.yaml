@@ -16,7 +16,7 @@ dashboard:
 
 # Not using the hosted relay for this box -- everything below works fully
 # offline. Uncomment only if/when you want a shared dashboard across
-# multiple boxes:
+# multiple boxes. Leave unset and nothing is uploaded.
 # relay_url: "https://halo-relay.example.com"
 # relay_token: "paste-the-device-token-issued-at-registration"
 
@@ -35,6 +35,12 @@ budget:
   hard_cap_usd: 50.0    # Halo starts refusing requests for this agent -- the
                         # kill switch. Raise/lower to match your risk comfort.
   per_agent: []         # Add an override here only if you register a 2nd agent later.
+
+# Starter denylist (cloud metadata + paste/exfil sinks) is always on, even
+# with this block omitted. Add extras here if you want; empty extras do not
+# open metadata. api.openai.com / api.anthropic.com are never denied.
+# egress:
+#   denied_upstreams: []
 
 cache:
   enabled: true

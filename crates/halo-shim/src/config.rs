@@ -81,12 +81,11 @@ pub struct Config {
     #[serde(default)]
     pub dashboard: DashboardConfig,
 
-    /// Outbound egress policy. Empty (default) = unrestricted, today's
-    /// behavior. Non-empty = every egress Halo itself initiates (the LLM
-    /// provider, the embeddings API, and the relay upload) is checked against
-    /// this list first and hard-denied if the host isn't on it -- enforced at
-    /// dispatch time, not just logged. Opt-in and additive: an existing
-    /// install with no `egress:` block behaves exactly as before.
+    /// Outbound egress policy. A built-in starter denylist always applies
+    /// (cloud metadata + a few common exfil sinks); `denied_upstreams` adds
+    /// to it. `allowed_upstreams` is still opt-in: empty = any non-denied
+    /// host, non-empty = only those hosts (after the denylist). Enforced at
+    /// dispatch time on every egress Halo itself initiates.
     #[serde(default)]
     pub egress: EgressConfig,
 
@@ -126,42 +125,113 @@ impl Default for Config {
     }
 }
 
-/// Outbound egress allowlist. See the field doc on `Config::egress`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Hosts the starter denylist always blocks, even if `denied_upstreams` is
+/// empty. Cloud instance-metadata endpoints plus a short list of paste/exfil
+/// sinks. Never includes `api.openai.com` / `api.anthropic.com`.
+pub const STARTER_DENIED_UPSTREAMS: &[&str] = &[
+    "169.254.169.254",
+    "169.254.170.2",
+    "fd00:ec2::254",
+    "metadata.google.internal",
+    ".webhook.site",
+    ".requestbin.com",
+    ".pipedream.net",
+];
+
+/// Provider hosts that a denylist entry must not be able to block. They can
+/// still fail an allowlist (region-lock) if one is configured.
+const NEVER_DENY: &[&str] = &["api.openai.com", "api.anthropic.com"];
+
+/// Outbound egress policy. See the field doc on `Config::egress`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EgressConfig {
-    /// Host names Halo is permitted to send requests to. Empty = allow all
-    /// (unrestricted). Matched case-insensitively; a rule beginning with `.`
-    /// matches any subdomain (and the apex) of that suffix, e.g. `.example.com`
-    /// matches `api.example.com` and `example.com`, but NOT `evil-example.com`.
-    /// No scheme, no port, no path -- host only.
+    /// Host names Halo is permitted to send requests to. Empty = allow any
+    /// host that isn't denied. Matched case-insensitively; a rule beginning
+    /// with `.` matches any subdomain (and the apex) of that suffix, e.g.
+    /// `.example.com` matches `api.example.com` and `example.com`, but NOT
+    /// `evil-example.com`. No scheme, no port, no path -- host only.
     #[serde(default)]
     pub allowed_upstreams: Vec<String>,
+    /// Extra deny rules on top of [`STARTER_DENIED_UPSTREAMS`]. Deny wins
+    /// over the allowlist. Empty extras do not disable the starter list.
+    #[serde(default)]
+    pub denied_upstreams: Vec<String>,
 }
 
 impl EgressConfig {
-    /// True if `host` is permitted -- either no policy is configured (allow
-    /// all) or `host` matches an entry exactly or via a `.`-prefixed
-    /// subdomain wildcard.
+    /// Starter denylist plus any extra `denied_upstreams` (deduped).
+    pub fn effective_denied(&self) -> Vec<String> {
+        let mut out: Vec<String> = STARTER_DENIED_UPSTREAMS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        for extra in &self.denied_upstreams {
+            let extra = extra.trim();
+            if extra.is_empty() {
+                continue;
+            }
+            if !out.iter().any(|s| s.eq_ignore_ascii_case(extra)) {
+                out.push(extra.to_string());
+            }
+        }
+        out
+    }
+
+    /// True if `host` is permitted. Deny (starter ∪ extras) wins; then the
+    /// allowlist if configured; otherwise allow. `api.openai.com` and
+    /// `api.anthropic.com` skip the denylist so a mis-edit can't cut the two
+    /// default providers, but they still honor an allowlist.
     pub fn permits_host(&self, host: &str) -> bool {
+        let host = normalize_host(host);
+        if !is_never_deny(&host) && host_matches_any(&host, &self.effective_denied()) {
+            return false;
+        }
         if self.allowed_upstreams.is_empty() {
             return true;
         }
-        let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
-        self.allowed_upstreams.iter().any(|rule| {
-            let rule = rule.trim().to_ascii_lowercase();
-            match rule.strip_prefix('.') {
-                Some(suffix) if !suffix.is_empty() => {
-                    host == suffix || host.ends_with(&format!(".{suffix}"))
-                }
-                _ => host == rule,
-            }
-        })
+        host_matches_any(&host, &self.allowed_upstreams)
     }
 
-    /// True if any allowlist is configured at all (used for `halo status` /
-    /// dashboard display of the current egress policy).
+    /// True if an allowlist is configured (used for `halo status` / dashboard).
     pub fn is_restricted(&self) -> bool {
         !self.allowed_upstreams.is_empty()
+    }
+}
+
+impl Default for EgressConfig {
+    fn default() -> Self {
+        Self {
+            allowed_upstreams: Vec::new(),
+            // Copied into the first-run yaml so the operator can see what's
+            // blocked. `effective_denied` still unions with the const, so
+            // emptying this list does not open metadata hosts.
+            denied_upstreams: STARTER_DENIED_UPSTREAMS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        }
+    }
+}
+
+fn normalize_host(host: &str) -> String {
+    host.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn is_never_deny(host: &str) -> bool {
+    NEVER_DENY.iter().any(|h| host == *h)
+}
+
+fn host_matches_any(host: &str, rules: &[String]) -> bool {
+    rules.iter().any(|rule| host_matches_rule(host, rule))
+}
+
+fn host_matches_rule(host: &str, rule: &str) -> bool {
+    let rule = rule.trim().to_ascii_lowercase();
+    match rule.strip_prefix('.') {
+        Some(suffix) if !suffix.is_empty() => {
+            host == suffix || host.ends_with(&format!(".{suffix}"))
+        }
+        _ => host == rule,
     }
 }
 
@@ -195,10 +265,13 @@ impl Default for DashboardConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BudgetConfig {
     /// Global soft cap in USD over the rolling window; warn but keep serving.
+    /// Fresh installs materialize $25; existing files without this field stay
+    /// uncapped (`None`).
     #[serde(default)]
     pub soft_cap_usd: Option<f64>,
     /// Global hard cap in USD; refuse requests once exceeded. Enforced locally
-    /// and always, even if the relay has never been reachable.
+    /// and always, even if the relay has never been reachable. Fresh installs
+    /// materialize $50.
     #[serde(default)]
     pub hard_cap_usd: Option<f64>,
     /// Per-agent overrides.
@@ -216,8 +289,8 @@ fn default_window_hours() -> u64 {
 impl Default for BudgetConfig {
     fn default() -> Self {
         Self {
-            soft_cap_usd: None,
-            hard_cap_usd: None,
+            soft_cap_usd: Some(25.0),
+            hard_cap_usd: Some(50.0),
             per_agent: Vec::new(),
             window_hours: default_window_hours(),
         }
@@ -443,6 +516,20 @@ impl Config {
         Ok(cfg)
     }
 
+    /// First-run write: if `path` is missing, persist [`Config::default`]
+    /// (armed $25/$50 caps, starter denylist in comments via the struct
+    /// defaults) so a fresh install refuses a runaway without YAML hunting.
+    /// Existing files are left untouched.
+    pub fn load_or_materialize(path: &Path) -> anyhow::Result<Self> {
+        if path.exists() {
+            return Self::load(path);
+        }
+        let cfg = Config::default();
+        let yaml = serde_yaml::to_string(&cfg)?;
+        crate::util::atomic_write_0600(path, yaml.as_bytes())?;
+        Ok(cfg)
+    }
+
     /// Resolve the active entitlements from `license_key`. The value may be the
     /// signed token itself or a path to a file holding it; a path that exists
     /// is read, otherwise the string is treated as the token. Infallible: any
@@ -482,19 +569,71 @@ impl Config {
 mod tests {
     use super::*;
 
+    fn allow(rules: &[&str]) -> EgressConfig {
+        EgressConfig {
+            allowed_upstreams: rules.iter().map(|s| s.to_string()).collect(),
+            denied_upstreams: Vec::new(),
+        }
+    }
+
     #[test]
-    fn empty_allowlist_permits_everything() {
-        let e = EgressConfig::default();
+    fn empty_allowlist_permits_providers_but_not_metadata() {
+        let e = EgressConfig {
+            allowed_upstreams: Vec::new(),
+            denied_upstreams: Vec::new(),
+        };
         assert!(e.permits_host("api.anthropic.com"));
+        assert!(e.permits_host("api.openai.com"));
         assert!(e.permits_host("anything.example.net"));
+        assert!(!e.permits_host("169.254.169.254"));
         assert!(!e.is_restricted());
     }
 
     #[test]
-    fn exact_match_is_permitted_others_denied() {
+    fn starter_denies_metadata_even_with_empty_extras() {
         let e = EgressConfig {
-            allowed_upstreams: vec!["api.anthropic.com".to_string()],
+            allowed_upstreams: Vec::new(),
+            denied_upstreams: Vec::new(),
         };
+        assert!(!e.permits_host("169.254.169.254"));
+        assert!(!e.permits_host("metadata.google.internal"));
+        assert!(!e.permits_host("webhook.site"));
+        assert!(!e.permits_host("foo.requestbin.com"));
+    }
+
+    #[test]
+    fn custom_deny_blocks_extra_host() {
+        let e = EgressConfig {
+            allowed_upstreams: Vec::new(),
+            denied_upstreams: vec!["evil.example.com".to_string()],
+        };
+        assert!(!e.permits_host("evil.example.com"));
+        assert!(e.permits_host("api.anthropic.com"));
+    }
+
+    #[test]
+    fn deny_wins_over_allowlist() {
+        let e = EgressConfig {
+            allowed_upstreams: vec!["169.254.169.254".to_string()],
+            denied_upstreams: Vec::new(),
+        };
+        assert!(!e.permits_host("169.254.169.254"));
+        assert!(!e.permits_host("api.openai.com"));
+    }
+
+    #[test]
+    fn never_deny_openai_or_anthropic_via_denylist() {
+        let e = EgressConfig {
+            allowed_upstreams: Vec::new(),
+            denied_upstreams: vec!["api.openai.com".into(), "api.anthropic.com".into()],
+        };
+        assert!(e.permits_host("api.openai.com"));
+        assert!(e.permits_host("api.anthropic.com"));
+    }
+
+    #[test]
+    fn exact_match_is_permitted_others_denied() {
+        let e = allow(&["api.anthropic.com"]);
         assert!(e.is_restricted());
         assert!(e.permits_host("api.anthropic.com"));
         assert!(!e.permits_host("api.openai.com"));
@@ -502,9 +641,7 @@ mod tests {
 
     #[test]
     fn dot_prefix_wildcard_matches_subdomain_and_apex() {
-        let e = EgressConfig {
-            allowed_upstreams: vec![".example.com".to_string()],
-        };
+        let e = allow(&[".example.com"]);
         assert!(e.permits_host("example.com"));
         assert!(e.permits_host("api.example.com"));
         assert!(e.permits_host("deep.sub.example.com"));
@@ -512,20 +649,46 @@ mod tests {
 
     #[test]
     fn wildcard_does_not_match_lookalike_suffix() {
-        let e = EgressConfig {
-            allowed_upstreams: vec![".example.com".to_string()],
-        };
-        // "evil-example.com" ends with "example.com" as a raw string but is
-        // NOT a subdomain of it -- must not match.
+        let e = allow(&[".example.com"]);
         assert!(!e.permits_host("evil-example.com"));
     }
 
     #[test]
     fn matching_is_case_insensitive_and_ignores_trailing_dot() {
-        let e = EgressConfig {
-            allowed_upstreams: vec!["API.Anthropic.com".to_string()],
-        };
+        let e = allow(&["API.Anthropic.com"]);
         assert!(e.permits_host("api.anthropic.com."));
         assert!(e.permits_host("API.ANTHROPIC.COM"));
+    }
+
+    #[test]
+    fn default_budget_caps_are_armed() {
+        let b = BudgetConfig::default();
+        assert_eq!(b.soft_cap_usd, Some(25.0));
+        assert_eq!(b.hard_cap_usd, Some(50.0));
+        assert_eq!(b.window_hours, 24);
+    }
+
+    #[test]
+    fn existing_yaml_without_caps_stays_uncapped() {
+        let cfg: Config = serde_yaml::from_str("listen: \"127.0.0.1:8787\"\n").unwrap();
+        let with_window: Config =
+            serde_yaml::from_str("budget:\n  window_hours: 24\n").unwrap();
+        assert_eq!(with_window.budget.soft_cap_usd, None);
+        assert_eq!(with_window.budget.hard_cap_usd, None);
+        assert_eq!(cfg.budget.soft_cap_usd, Some(25.0));
+    }
+
+    #[test]
+    fn load_or_materialize_writes_armed_defaults_once() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.yaml");
+        let first = Config::load_or_materialize(&path).unwrap();
+        assert!(path.exists());
+        assert_eq!(first.budget.hard_cap_usd, Some(50.0));
+        assert_eq!(first.budget.soft_cap_usd, Some(25.0));
+        std::fs::write(&path, "budget:\n  hard_cap_usd: 9.0\n  window_hours: 24\n").unwrap();
+        let second = Config::load_or_materialize(&path).unwrap();
+        assert_eq!(second.budget.hard_cap_usd, Some(9.0));
+        assert_eq!(second.budget.soft_cap_usd, None);
     }
 }

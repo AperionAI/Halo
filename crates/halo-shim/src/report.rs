@@ -59,6 +59,10 @@ pub struct Report {
     /// carried an `X-Halo-Subject` hint appear here. Empty when nothing set
     /// one, so a solo user never sees an empty section.
     pub by_subject: BTreeMap<String, AgentRollup>,
+    /// Per `task_class` (`chat`, `embedding`, ...).
+    pub by_task: BTreeMap<String, AgentRollup>,
+    /// Hourly buckets (UTC, `YYYY-MM-DD HH:00`) for the selected window.
+    pub by_hour: BTreeMap<String, AgentRollup>,
 }
 
 /// Roll up events optionally filtered to those on/after `since` (unix secs).
@@ -93,6 +97,14 @@ pub fn build(events: &[TelemetryEvent], since_secs: Option<i64>, prices: &PriceT
         if let Some(subj) = e.subject.as_ref().filter(|s| !s.is_empty()) {
             buckets.push(report.by_subject.entry(subj.clone()).or_default());
         }
+        let task = if e.task_class.is_empty() {
+            "unknown".to_string()
+        } else {
+            e.task_class.clone()
+        };
+        buckets.push(report.by_task.entry(task).or_default());
+        let hour = e.timestamp.format("%Y-%m-%d %H:00 UTC").to_string();
+        buckets.push(report.by_hour.entry(hour).or_default());
         for bucket in buckets {
             accumulate(bucket, e, &breakdown);
         }
@@ -192,7 +204,92 @@ pub fn render(report: &Report) -> String {
             ));
         }
     }
+    if !report.by_task.is_empty() {
+        out.push_str("\nBy task:\n");
+        for (task, r) in &report.by_task {
+            out.push_str(&format!(
+                "  {task:<28} spend {}  saved {}  ({} reqs)\n",
+                fmt_usd(r.actual_cost),
+                fmt_usd(r.savings()),
+                r.requests
+            ));
+        }
+    }
+    if !report.by_hour.is_empty() {
+        out.push_str("\nBy hour (UTC):\n");
+        for (hour, r) in &report.by_hour {
+            out.push_str(&format!(
+                "  {hour:<22} spend {}  ({} reqs)\n",
+                fmt_usd(r.actual_cost),
+                r.requests
+            ));
+        }
+    }
     out
+}
+
+#[derive(serde::Serialize)]
+struct RollupJson {
+    requests: u64,
+    cache_hits: u64,
+    semantic_hits: u64,
+    actual_cost: f64,
+    savings: f64,
+    baseline_savings: f64,
+    hit_savings: f64,
+}
+
+#[derive(serde::Serialize)]
+struct NamedRollupJson {
+    name: String,
+    #[serde(flatten)]
+    rollup: RollupJson,
+}
+
+#[derive(serde::Serialize)]
+struct ReportJson {
+    total: RollupJson,
+    by_agent: Vec<NamedRollupJson>,
+    by_model: Vec<NamedRollupJson>,
+    by_subject: Vec<NamedRollupJson>,
+    by_task: Vec<NamedRollupJson>,
+    by_hour: Vec<NamedRollupJson>,
+}
+
+fn rollup_json(r: &AgentRollup) -> RollupJson {
+    RollupJson {
+        requests: r.requests,
+        cache_hits: r.cache_hits,
+        semantic_hits: r.semantic_hits,
+        actual_cost: r.actual_cost,
+        savings: r.savings(),
+        baseline_savings: r.baseline_savings(),
+        hit_savings: r.hit_savings(),
+    }
+}
+
+fn named(map: &BTreeMap<String, AgentRollup>) -> Vec<NamedRollupJson> {
+    map.iter()
+        .filter(|(k, _)| !k.is_empty())
+        .map(|(k, v)| NamedRollupJson {
+            name: k.clone(),
+            rollup: rollup_json(v),
+        })
+        .collect()
+}
+
+/// Machine-readable export of the same rollup `render` prints. Window is
+/// whatever the caller already filtered; this does not re-clamp.
+pub fn render_json(report: &Report) -> anyhow::Result<String> {
+    let body = ReportJson {
+        total: rollup_json(&report.total),
+        by_agent: named(&report.by_agent),
+        by_model: named(&report.by_model),
+        by_subject: named(&report.by_subject),
+        by_task: named(&report.by_task),
+        by_hour: named(&report.by_hour),
+    };
+    Ok(serde_json::to_string_pretty(&body)?)
 }
 
 /// Show 4 decimals for normal amounts, but widen to 6 for sub-cent spend so a
@@ -263,6 +360,29 @@ mod tests {
         assert_eq!(s.requests, 1);
         // ...but both are counted in the totals.
         assert_eq!(r.total.requests, 2);
+    }
+
+    #[test]
+    fn by_task_and_hourly_buckets() {
+        let mut chat = ev("a", "gpt-4o", 0.10, 0.20, false);
+        chat.task_class = "chat".into();
+        chat.timestamp = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut embed = ev("a", "text-embedding-3-small", 0.01, 0.01, false);
+        embed.task_class = "embedding".into();
+        embed.timestamp = chrono::DateTime::from_timestamp(1_700_000_000 + 3600, 0).unwrap();
+
+        let r = build(&[chat, embed], None, &PriceTable::default());
+        assert_eq!(r.by_task.len(), 2);
+        assert_eq!(r.by_task["chat"].requests, 1);
+        assert_eq!(r.by_task["embedding"].requests, 1);
+        assert_eq!(r.by_hour.len(), 2);
+        let rendered = render(&r);
+        assert!(rendered.contains("By task:"));
+        assert!(rendered.contains("By hour (UTC):"));
+        let json = render_json(&r).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["total"]["requests"], 2);
+        assert_eq!(v["by_task"].as_array().unwrap().len(), 2);
     }
 
     #[test]

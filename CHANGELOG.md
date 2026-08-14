@@ -1,5 +1,70 @@
 # Changelog
 
+## 1.4.0
+
+R3 starts here: the Free / Cut / Route / Govern ladder is a real license
+shape, and Free history is 7 days so Cut has something to sell. Cache and
+compression stay on Free — the savings number has to be true on a $0
+install. Stripe checkout is the next R3 slice; today you still paste
+`license_key` into `~/.halo/config.yaml`.
+
+### Added
+
+- **Ladder.** `cut` / `route` / `govern` feature flags. Legacy paid
+  `pro`/`team` keys count as Cut. `halo license issue --tier cut` (default)
+  fills the Cut feature set when you don't pass `--feature`.
+- **History caps.** Free 7 days, Cut 30, Route/Govern 90. `halo report` and
+  the dashboard clamp to the cap (`--hours 0` / "all time" is no longer
+  unbounded).
+- **Upgrade CTA** on the loopback dashboard for Free: would-have cost and
+  Halo saved, from this install's own traffic, plus Cut at $50/mo.
+- **`halo report --format json [--out file]`.** Same rollup as the text
+  report, pipeable. Window is still the tier cap (7 / 30 / 90 days).
+
+## 1.3.5
+
+R2 hardening of the public-free install path. Same Free scope as 1.3.4;
+OpenClaw is no longer a three-file hand patch. Halo LICENSE is still the
+binary agreement — publishing the shim as open source is a separate legal
+gate (entity structure, Craig/Frank), not this drop.
+
+### Added
+
+- **`halo openclaw apply --agent <id>`.** Writes the field-verified
+  OpenClaw config + auth-store patches (baseUrl, virtual key, nested
+  `allowPrivateNetwork`), backs up the previous files, `--dry-run` to
+  preview. Env vars still do not work for OpenClaw; this is the command
+  that does.
+- **Shield README pointer** to Halo, worded so Shield's terms are
+  unchanged.
+
+## 1.3.4
+
+First-run firewall: a fresh `halo` write now arms spend caps and a starter
+egress denylist so an install refuses a runaway and blocks cloud-metadata
+exfil without anyone editing YAML first. `halo report` and the loopback
+dashboard also roll up by task and by hour. Relay stays optional; with
+`relay_url` unset nothing is uploaded.
+
+### Added
+
+- **Starter egress denylist.** Cloud metadata hosts (`169.254.169.254`,
+  `metadata.google.internal`, …) and a short list of paste/exfil sinks are
+  always denied. Extra hosts go in `egress.denied_upstreams`. Deny wins over
+  the allowlist. Empty extras do not open metadata. `api.openai.com` /
+  `api.anthropic.com` cannot be blocked by the denylist.
+- **Armed default caps on first config write.** `$25` soft / `$50` hard per
+  24h, matching `docs/claw-box.config.yaml`. Existing files that already set
+  `budget.window_hours` without caps are left uncapped. `halo status` and the
+  dashboard show remaining budget and how to raise it.
+- **Spend by task and by hour** in `halo report` and `/api/summary`.
+
+### Changed
+
+- README / INSTALL / CLAW_BOX lead with local-only: nothing leaves the
+  machine when `relay_url` is unset. The hosted relay is not a Free
+  requirement.
+
 ## 1.3.3
 
 A field-verified operator runbook came in from an early adopter after 1.3.2

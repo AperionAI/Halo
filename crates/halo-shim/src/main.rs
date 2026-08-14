@@ -15,6 +15,7 @@ mod embeddings;
 mod ingress;
 mod keys;
 mod mcp;
+mod openclaw;
 mod registry;
 mod report;
 mod revocations;
@@ -57,9 +58,15 @@ enum Cmd {
     Status,
     /// Local COGS / savings report (works fully offline).
     Report {
-        /// Only include the last N hours.
+        /// Only include the last N hours (clamped to the tier history cap).
         #[arg(long)]
         hours: Option<i64>,
+        /// `text` (default) or `json` for an exportable file.
+        #[arg(long, value_enum, default_value_t = ReportFormat::Text)]
+        format: ReportFormat,
+        /// Write the report to this path instead of stdout.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
     },
     /// Emergency stop: revoke an agent's key so the proxy refuses it at once.
     Kill {
@@ -93,6 +100,32 @@ enum Cmd {
     Service {
         #[command(subcommand)]
         action: ServiceCmd,
+    },
+    /// Point an OpenClaw Gateway at this Halo install. Env vars do not
+    /// work for OpenClaw -- this writes the field-verified config + auth
+    /// patches. See docs/OPENCLAW_INTEGRATION.md.
+    Openclaw {
+        #[command(subcommand)]
+        action: OpenclawCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum OpenclawCmd {
+    /// Patch OpenClaw's config + auth store so traffic goes through Halo.
+    Apply {
+        /// Halo agent id from `halo agent add`.
+        #[arg(long)]
+        agent: String,
+        /// OpenClaw home directory. Defaults to ~/.openclaw.
+        #[arg(long)]
+        home: Option<std::path::PathBuf>,
+        /// OpenClaw runtime agent directory under agents/. Discovered if omitted.
+        #[arg(long)]
+        runtime_agent: Option<String>,
+        /// Print the patched files and do not write.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -128,6 +161,12 @@ enum RegistryFormat {
     Csv,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum ReportFormat {
+    Text,
+    Json,
+}
+
 #[derive(Subcommand)]
 enum DashboardCmd {
     /// Print the local token required to change settings or revoke an agent
@@ -150,8 +189,10 @@ enum LicenseCmd {
     Issue {
         #[arg(long)]
         org: String,
-        /// Display label for the tier (e.g. "pro", "team").
-        #[arg(long, default_value = "pro")]
+        /// Display label for the tier (`cut`, `route`, `govern`, or a legacy
+        /// `pro`/`team` name). Empty `--feature` list fills Cut/Route/Govern
+        /// defaults from the name.
+        #[arg(long, default_value = "cut")]
         tier: String,
         #[arg(long, default_value_t = 1)]
         seats: u32,
@@ -232,18 +273,22 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let paths = Paths::resolve();
     paths.ensure().context("creating ~/.halo")?;
+    // First `halo` invocation writes an armed default config (caps + starter
+    // denylist) so a fresh install is a firewall without YAML hunting.
+    let _ = Config::load_or_materialize(&paths.config())?;
 
     match cli.cmd.unwrap_or(Cmd::Serve) {
         Cmd::Serve => serve(paths).await,
         Cmd::Agent { action } => agent_cmd(paths, action),
         Cmd::Status => status(paths),
-        Cmd::Report { hours } => report_cmd(paths, hours),
+        Cmd::Report { hours, format, out } => report_cmd(paths, hours, format, out),
         Cmd::Kill { agent } => kill(paths, &agent),
         Cmd::Embeddings { action } => embeddings_cmd(paths, action),
         Cmd::License { action } => license_cmd(paths, action),
         Cmd::Dashboard { action } => dashboard_cmd(paths, action),
         Cmd::Registry { action } => registry_cmd(paths, action),
         Cmd::Service { action } => service_cmd(action),
+        Cmd::Openclaw { action } => openclaw_cmd(paths, action),
     }
 }
 
@@ -252,6 +297,64 @@ fn service_cmd(action: ServiceCmd) -> Result<()> {
         ServiceCmd::Install { user } => service::install(user),
         ServiceCmd::Uninstall => service::uninstall(),
     }
+}
+
+fn openclaw_cmd(paths: Paths, action: OpenclawCmd) -> Result<()> {
+    match action {
+        OpenclawCmd::Apply {
+            agent,
+            home,
+            runtime_agent,
+            dry_run,
+        } => {
+            let cfg = Config::load(&paths.config())?;
+            let ks = keys::KeyStore::new(paths);
+            let rec = ks
+                .records()?
+                .into_iter()
+                .find(|r| r.agent_id == agent && r.is_active())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no active Halo agent '{agent}'. Register one first: \
+                         `halo agent add {agent} --provider anthropic`"
+                    )
+                })?;
+            if rec.provider != Provider::Anthropic {
+                anyhow::bail!(
+                    "halo openclaw apply currently patches the Anthropic provider only \
+                     (agent '{agent}' is {}). Register an Anthropic agent, or patch OpenClaw by hand.",
+                    rec.provider.as_str()
+                );
+            }
+            let home = match home {
+                Some(h) => h,
+                None => dirs::home_dir()
+                    .ok_or_else(|| anyhow::anyhow!("cannot resolve $HOME"))?
+                    .join(".openclaw"),
+            };
+            let oc = openclaw::OpenclawPaths::resolve(home, runtime_agent.as_deref(), &agent)?;
+            let base_url = format!("http://{}", cfg.listen);
+            let result = openclaw::apply(&oc, &base_url, &rec.virtual_key, dry_run)?;
+            if dry_run {
+                println!("dry-run: would write {}", result.config.display());
+                println!("{}", result.config_out);
+                println!("dry-run: would write {}", result.auth.display());
+                println!("{}", result.auth_out);
+            } else {
+                println!(
+                    "Patched OpenClaw runtime agent '{}' to use Halo at {base_url}.",
+                    result.runtime_agent
+                );
+                println!("  {}", result.config.display());
+                println!("  {}", result.auth.display());
+                println!(
+                    "Restart the OpenClaw gateway, then verify with:\n  \
+                     sudo lsof -nP -i -a -p <gateway-pid> -r2 | grep -E '8787|:443'"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn registry_cmd(paths: Paths, action: RegistryCmd) -> Result<()> {
@@ -313,6 +416,7 @@ fn license_cmd(paths: Paths, action: LicenseCmd) -> Result<()> {
             let cfg = Config::load(&paths.config())?;
             let ent = cfg.entitlements();
             println!("Smartflow Halo -- license");
+            println!("Ladder:   {}", ent.ladder().as_str());
             println!("Tier:     {}", ent.tier_label);
             println!("Status:   {}", ent.status.label());
             println!("Org:      {}", ent.org.as_deref().unwrap_or("-"));
@@ -320,20 +424,18 @@ fn license_cmd(paths: Paths, action: LicenseCmd) -> Result<()> {
                 println!("Seats:    {}", ent.seats);
             }
             println!("Expires:  {}", ent.expires_at.as_deref().unwrap_or("-"));
+            println!("History:  {}h max", ent.max_history_hours());
             println!("\nFeatures:");
             for f in halo_common::license::feature::ALL {
                 let mark = if ent.has(f) { "on " } else { "off" };
                 println!("  [{mark}] {f}");
             }
-            if matches!(ent.tier, halo_common::Tier::Free) {
+            if matches!(ent.ladder(), halo_common::Ladder::Free) {
                 println!(
-                    "\nThe free tier includes budgets + kill switch, exact-match cache, \n\
-                     compression, prompt-cache injection, MCP cloak/taint, local audit \n\
-                     and `halo report` -- all fully functional, unlimited, forever. The \n\
-                     one scale cap: up to {} registered agents (`halo agent add`). A paid \n\
-                     license adds the features above. Set `license_key` in \n\
-                     ~/.halo/config.yaml to activate.",
-                    halo_common::license::FREE_AGENT_LIMIT
+                    "\nFree is the firewall (caps, kill switch, denylist, 7-day history).\n\
+                     Cache and compression stay on so the savings number is real.\n\
+                     Cut ($50/mo) unlocks 30-day history. Paste a license key into\n\
+                     `license_key` in ~/.halo/config.yaml. Stripe checkout is the next slice."
                 );
             }
         }
@@ -347,6 +449,11 @@ fn license_cmd(paths: Paths, action: LicenseCmd) -> Result<()> {
         } => {
             let seed = load_signing_seed(&signing_key)?;
             let now = chrono::Utc::now();
+            let features = if features.is_empty() {
+                halo_common::Entitlements::default_features_for_tier(&tier)
+            } else {
+                features
+            };
             let claims = halo_common::LicenseClaims {
                 org,
                 tier,
@@ -563,25 +670,41 @@ fn status(paths: Paths) -> Result<()> {
         "Relay:   {}",
         cfg.relay_url.as_deref().unwrap_or("(local-only mode)")
     );
+    let recs = ks.records()?;
+    let spend = ledger.spend_by_agent()?;
+    let spent_global: f64 = spend.iter().map(|(_, c)| *c).sum();
     println!(
         "Caps:    global soft {:?}  hard {:?}  window {}h",
         cfg.budget.soft_cap_usd, cfg.budget.hard_cap_usd, cfg.budget.window_hours
     );
+    match cfg.budget.hard_cap_usd {
+        Some(hard) => {
+            let remaining = (hard - spent_global).max(0.0);
+            println!(
+                "         spent ${spent_global:.4} this window, ${remaining:.4} left before the kill switch"
+            );
+            println!("         raise `budget.hard_cap_usd` in ~/.halo/config.yaml (or the dashboard) to lift it");
+        }
+        None => println!("         no hard cap set -- a runaway will bill until you add one"),
+    }
+    let denied = cfg.egress.effective_denied();
     println!(
-        "Egress:  {}",
+        "Egress:  deny {} host(s) (starter + extras); {}",
+        denied.len(),
         if cfg.egress.is_restricted() {
-            format!("restricted to {} host(s)", cfg.egress.allowed_upstreams.len())
+            format!("allowlist {} host(s)", cfg.egress.allowed_upstreams.len())
         } else {
-            "unrestricted (no egress.allowed_upstreams configured)".to_string()
+            "allowlist unrestricted".to_string()
         }
     );
+    for h in &denied {
+        println!("         - {h}");
+    }
     println!(
         "At rest: {}",
         if cfg.encrypt_at_rest { "encrypted (cache + semantic cache)" } else { "plaintext (encrypt_at_rest: false)" }
     );
 
-    let recs = ks.records()?;
-    let spend = ledger.spend_by_agent()?;
     println!("\nAgents:");
     if recs.is_empty() {
         println!("  (none)");
@@ -603,21 +726,30 @@ fn status(paths: Paths) -> Result<()> {
     Ok(())
 }
 
-fn report_cmd(paths: Paths, hours: Option<i64>) -> Result<()> {
+fn report_cmd(
+    paths: Paths,
+    hours: Option<i64>,
+    format: ReportFormat,
+    out: Option<std::path::PathBuf>,
+) -> Result<()> {
     let cfg = Config::load(&paths.config())?;
     let log_path = paths.base.join("telemetry.jsonl");
+    let json = matches!(format, ReportFormat::Json);
 
-    // Print the directory being read up front. On a box where `halo serve`
-    // runs as a service user, running `halo report` as a different user reads
-    // that user's ~/.halo (a different, empty store) -- a confident "$0.0000"
-    // in that case has burned real debugging time, so surface the path (and,
-    // if there's nothing here, say so explicitly rather than showing zeros).
-    println!("Data dir: {}", paths.base.display());
+    // Path diagnostics go to stderr so `halo report --format json` is pipeable.
+    let log = |s: &str| {
+        if json {
+            eprintln!("{s}");
+        } else {
+            println!("{s}");
+        }
+    };
+    log(&format!("Data dir: {}", paths.base.display()));
     if !log_path.exists() {
-        println!(
+        log(
             "\nNo telemetry log (telemetry.jsonl) exists in this directory yet -- Halo has \
              not recorded any requests here.\nIf you expected data, check that you're running \
-             as the same user (and $HOME / $HALO_HOME) as `halo serve`.\n"
+             as the same user (and $HOME / $HALO_HOME) as `halo serve`.\n",
         );
     }
 
@@ -629,15 +761,30 @@ fn report_cmd(paths: Paths, hours: Option<i64>) -> Result<()> {
         log_path.clone(),
     );
     let events = telem.local_events();
-    let since = hours.map(|h| chrono::Utc::now().timestamp() - h * 3600);
+    let hours = cfg.entitlements().clamp_history_hours(hours);
+    log(&format!(
+        "Window:   last {hours}h (tier max {}h)",
+        cfg.entitlements().max_history_hours()
+    ));
+    let since = Some(chrono::Utc::now().timestamp() - hours * 3600);
     let r = report::build(&events, since, &cfg.price_table());
     if log_path.exists() && r.total.requests == 0 {
-        println!(
+        log(
             "\nThe telemetry log here has no requests in the selected window. If you expected \
-             data, confirm `halo serve` writes to this same directory (same user / $HALO_HOME).\n"
+             data, confirm `halo serve` writes to this same directory (same user / $HALO_HOME).\n",
         );
     }
-    print!("{}", report::render(&r));
+    let body = match format {
+        ReportFormat::Text => report::render(&r),
+        ReportFormat::Json => report::render_json(&r)?,
+    };
+    match out {
+        Some(path) => {
+            std::fs::write(&path, &body)?;
+            eprintln!("wrote {}", path.display());
+        }
+        None => print!("{body}"),
+    }
     Ok(())
 }
 

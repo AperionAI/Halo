@@ -15,7 +15,9 @@ bills straight against your account. Halo sits in between as a tiny local
 proxy: Claw talks to Halo exactly like it would talk to Anthropic, Halo
 enforces a hard spending cap and caches repeat/similar calls, then forwards
 to the real key, which it holds in the OS keychain. Claw never sees the real
-key.
+key. First `halo` run arms $25 soft / $50 hard per 24h and a starter denylist
+(cloud metadata hosts, paste/exfil sinks) so the box is a firewall before you
+edit YAML. `relay_url` stays unset; nothing is uploaded.
 
 ## 1. Install Halo on the claw box
 
@@ -102,13 +104,10 @@ export ANTHROPIC_API_KEY=sf_live_claw_xxxxxxxxxxxxxxxx
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
 ```
 
-> **Running the OpenClaw Gateway?** These env vars **do not work for OpenClaw** --
-> it ignores the process environment on service installs and reads its key and
-> endpoint from its own config + auth store instead. You'll need a config patch
-> in `openclaw.json` plus the virtual key written into the agent's
-> `auth-profiles.json`. See [`OPENCLAW_INTEGRATION.md`](./OPENCLAW_INTEGRATION.md)
-> for the exact recipe, the two gotchas, and how to verify with `lsof` that
-> traffic is actually going through Halo.
+> **Running the OpenClaw Gateway?** These env vars **do not work for OpenClaw**.
+> After `halo agent add`, run `halo openclaw apply --agent claw` and restart
+> the gateway. Details, gotchas, and the `lsof` check:
+> [`OPENCLAW_INTEGRATION.md`](./OPENCLAW_INTEGRATION.md).
 
 Restart Claw. It should work exactly as before -- Halo is a transparent
 passthrough for normal traffic; the only difference is what happens at the

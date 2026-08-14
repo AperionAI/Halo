@@ -498,9 +498,9 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         return error_response(
             StatusCode::FORBIDDEN,
             &format!(
-                "Halo egress policy denied this request: \"{denied_host}\" is not on \
-                 egress.allowed_upstreams in ~/.halo/config.yaml. Add it there if this \
-                 provider endpoint is expected."
+                "Halo egress policy denied this request: \"{denied_host}\" is blocked by \
+                 the denylist (egress.denied_upstreams / starter) or is not on \
+                 egress.allowed_upstreams in ~/.halo/config.yaml."
             ),
         );
     }

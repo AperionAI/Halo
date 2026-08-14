@@ -41,6 +41,11 @@ pub const FREE_SEMANTIC_CACHE_MAX_ENTRIES: u64 = 200;
 /// hits it long before ever needing remote-kill or multi-seat.
 pub const FREE_AGENT_LIMIT: u32 = 3;
 
+/// Free-tier local history window (7 days). Cut is 30; Route/Govern is 90.
+pub const FREE_HISTORY_HOURS: u64 = 7 * 24;
+pub const CUT_HISTORY_HOURS: u64 = 30 * 24;
+pub const ROUTE_HISTORY_HOURS: u64 = 90 * 24;
+
 /// Aperion's production license-signing public key (Ed25519, base64url, no pad).
 /// The matching private key is held by Aperion offline and never ships in any
 /// binary. Override at verify time (e.g. staging keys) with the
@@ -66,8 +71,21 @@ pub mod feature {
     /// solo self-hoster scaling up on a single machine, not just a team.
     pub const MULTI_AGENT_UNLIMITED: &str = "multi_agent_unlimited";
 
+    /// Paid Cut tier ($50): 30-day history and the savings stack. Also implied
+    /// by any legacy paid license that doesn't name a ladder feature.
+    pub const CUT: &str = "cut";
+    /// Paid Route tier ($100): 90-day exportable history. Routing itself is a
+    /// later R3 slice.
+    pub const ROUTE: &str = "route";
+    /// Paid Govern tier ($250). Gated on the relay; the flag exists so a
+    /// minted key can name it without an older binary failing to parse.
+    pub const GOVERN: &str = "govern";
+
     /// All known features (for `halo license show` and issuer validation help).
     pub const ALL: &[&str] = &[
+        CUT,
+        ROUTE,
+        GOVERN,
         ALERTING,
         REMOTE_KILL,
         SEMANTIC_CACHE_UNLIMITED,
@@ -104,6 +122,27 @@ pub struct LicenseClaims {
 pub enum Tier {
     Free,
     Paid,
+}
+
+/// Product ladder (Free / Cut / Route / Govern). Coarse [`Tier`] stays
+/// Free vs Paid so existing `has()` gates don't break; this is the v1.0 name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ladder {
+    Free,
+    Cut,
+    Route,
+    Govern,
+}
+
+impl Ladder {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Ladder::Free => "free",
+            Ladder::Cut => "cut",
+            Ladder::Route => "route",
+            Ladder::Govern => "govern",
+        }
+    }
 }
 
 /// Why the resolved entitlements are what they are -- surfaced verbatim by
@@ -168,6 +207,71 @@ impl Entitlements {
     /// always `false`. This is the ONLY method feature-gating should call.
     pub fn has(&self, feature: &str) -> bool {
         matches!(self.tier, Tier::Paid) && self.features.iter().any(|f| f == feature)
+    }
+
+    /// v1.0 ladder. Any active paid license that doesn't name Route/Govern
+    /// is Cut, including legacy `pro`/`team` keys.
+    pub fn ladder(&self) -> Ladder {
+        if !matches!(self.tier, Tier::Paid) {
+            return Ladder::Free;
+        }
+        let label = self.tier_label.to_ascii_lowercase();
+        if self.has(feature::GOVERN) || label == "govern" {
+            return Ladder::Govern;
+        }
+        if self.has(feature::ROUTE) || label == "route" {
+            return Ladder::Route;
+        }
+        Ladder::Cut
+    }
+
+    pub fn max_history_hours(&self) -> u64 {
+        match self.ladder() {
+            Ladder::Free => FREE_HISTORY_HOURS,
+            Ladder::Cut => CUT_HISTORY_HOURS,
+            Ladder::Route | Ladder::Govern => ROUTE_HISTORY_HOURS,
+        }
+    }
+
+    /// Cap a requested report/dashboard window. `None` or `0` (the old
+    /// "all time" choice) becomes the tier max so Free is actually 7 days.
+    pub fn clamp_history_hours(&self, requested: Option<i64>) -> i64 {
+        let cap = self.max_history_hours() as i64;
+        match requested {
+            None | Some(0) => cap,
+            Some(h) if h < 0 => cap,
+            Some(h) => h.min(cap),
+        }
+    }
+
+    /// Default feature list when minting `--tier cut|route|govern` with no
+    /// explicit `--feature` flags.
+    pub fn default_features_for_tier(tier: &str) -> Vec<String> {
+        match tier.trim().to_ascii_lowercase().as_str() {
+            "cut" => vec![
+                feature::CUT.to_string(),
+                feature::SEMANTIC_CACHE_UNLIMITED.to_string(),
+                feature::MULTI_AGENT_UNLIMITED.to_string(),
+            ],
+            "route" => vec![
+                feature::CUT.to_string(),
+                feature::ROUTE.to_string(),
+                feature::SEMANTIC_CACHE_UNLIMITED.to_string(),
+                feature::MULTI_AGENT_UNLIMITED.to_string(),
+            ],
+            "govern" => vec![
+                feature::CUT.to_string(),
+                feature::ROUTE.to_string(),
+                feature::GOVERN.to_string(),
+                feature::ALERTING.to_string(),
+                feature::REMOTE_KILL.to_string(),
+                feature::SEMANTIC_CACHE_UNLIMITED.to_string(),
+                feature::SUBJECT_ATTRIBUTION.to_string(),
+                feature::MULTI_SEAT.to_string(),
+                feature::MULTI_AGENT_UNLIMITED.to_string(),
+            ],
+            _ => Vec::new(),
+        }
     }
 
     /// Resolve entitlements from a configured license key using the embedded
@@ -453,5 +557,49 @@ mod tests {
             pubkey_from_b64url(APERION_LICENSE_PUBKEY_B64URL).is_some(),
             "the embedded production key must always decode"
         );
+    }
+
+    #[test]
+    fn free_history_is_seven_days_cut_is_thirty_route_is_ninety() {
+        let free = Entitlements::free(LicenseStatus::None);
+        assert_eq!(free.ladder(), Ladder::Free);
+        assert_eq!(free.max_history_hours(), 7 * 24);
+        assert_eq!(free.clamp_history_hours(None), 7 * 24);
+        assert_eq!(free.clamp_history_hours(Some(0)), 7 * 24);
+        assert_eq!(free.clamp_history_hours(Some(24)), 24);
+        assert_eq!(free.clamp_history_hours(Some(9999)), 7 * 24);
+
+        let sk = keypair();
+        let mut cut_claims = claims("2099-01-01T00:00:00Z");
+        cut_claims.tier = "cut".into();
+        cut_claims.features = Entitlements::default_features_for_tier("cut");
+        let cut = Entitlements::verify_with_key(
+            &issue(&cut_claims, &sk),
+            &sk.verifying_key(),
+            chrono::Utc::now(),
+        );
+        assert_eq!(cut.ladder(), Ladder::Cut);
+        assert_eq!(cut.max_history_hours(), 30 * 24);
+        assert!(cut.has(feature::CUT));
+
+        let mut route_claims = claims("2099-01-01T00:00:00Z");
+        route_claims.tier = "route".into();
+        route_claims.features = Entitlements::default_features_for_tier("route");
+        let route = Entitlements::verify_with_key(
+            &issue(&route_claims, &sk),
+            &sk.verifying_key(),
+            chrono::Utc::now(),
+        );
+        assert_eq!(route.ladder(), Ladder::Route);
+        assert_eq!(route.max_history_hours(), 90 * 24);
+
+        // Legacy paid "team" key with no ladder feature is still Cut.
+        let legacy = Entitlements::verify_with_key(
+            &issue(&claims("2099-01-01T00:00:00Z"), &sk),
+            &sk.verifying_key(),
+            chrono::Utc::now(),
+        );
+        assert_eq!(legacy.ladder(), Ladder::Cut);
+        assert_eq!(legacy.max_history_hours(), 30 * 24);
     }
 }

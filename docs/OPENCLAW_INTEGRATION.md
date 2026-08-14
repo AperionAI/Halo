@@ -2,8 +2,24 @@
 
 A worked example for the **OpenClaw Gateway** specifically. For a generic agent
 runtime, setting `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` in the runtime's
-environment is enough. **For the OpenClaw Gateway it is not** -- read the warning
-below before you do anything else.
+environment is enough. **For the OpenClaw Gateway it is not.**
+
+## One command (preferred)
+
+Register the Halo agent first (see [`CLAW_BOX_SETUP.md`](./CLAW_BOX_SETUP.md)
+step 2), then:
+
+```bash
+halo openclaw apply --agent claw
+# optional: --home /path/to/.openclaw  --runtime-agent main  --dry-run
+```
+
+That writes the two OpenClaw files the Gateway actually reads (`openclaw.json`
+and `agents/<id>/agent/auth-profiles.json`), backs the previous copies up as
+`*.halo-bak`, and sets `request.allowPrivateNetwork` under the Anthropic
+provider so the SSRF guard lets loopback through. Restart the gateway after.
+
+`--dry-run` prints the patched JSON and writes nothing.
 
 ## ⚠️ The env-var method does NOT work on OpenClaw
 
