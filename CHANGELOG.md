@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.6.6
+
+Route effort routing is on by default. Name the cheap agent `glm` and
+set `efficient_model` if that agent's model id isn't the inbound one.
+Streamed calls skip the hop. `halo report` rolls up hops, stream skips,
+and quality escalations.
+
+### Changed
+
+- **Route effort** (`routing.effort`) defaults to `mode: auto` when the
+  block is missing. Free and Cut still never hop.
+- Scorer stays in lockstep with Smartflow LCR (same `score` /
+  `infer_*` / `should_escalate_quality` bodies).
+
+### Added
+
+- `efficient_model` on the effort block so GLM hops rewrite the wire
+  model (e.g. `glm-4.7`) instead of leaving the inbound model name.
+- Effort rollup on `halo report`.
+
 ## 1.6.5
 
 Hermes gets the same one-command patch OpenClaw already had. Route can send

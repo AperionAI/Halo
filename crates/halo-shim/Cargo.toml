@@ -17,7 +17,7 @@ path = "src/main.rs"
 # this repo. halo-common isn't published yet either (halo-shim isn't a
 # meaningful standalone crate without it), so this is prep, not a live fix:
 # publish halo-common 1.3.3 first, then halo-shim can publish against it.
-halo-common = { path = "../halo-common", version = "1.6.5" }
+halo-common = { path = "../halo-common", version = "1.6.6" }
 # Reuse Shield's library surface for the MCP seam: reversible tokenization
 # (CloakVault) and credential-shape detection (taint::entities). This is the
 # explicit "reuse Shield, don't rebuild" decision from the architecture plan.

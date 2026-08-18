@@ -314,7 +314,7 @@ table.market .no { color: #64748b; }
         ▼
    <span class="acc">Smartflow or Halo</span>   score prompt → cheap or frontier
         │
-        ├─ easy  →  gpt-4o-mini / local GLM / Ollama
+        ├─ easy  →  same-provider mini / key local pool
         └─ hard  →  the model on the request
               └─ cheap failed?  one retry on frontier</div>
 
@@ -326,7 +326,7 @@ table.market .no { color: #64748b; }
       <span class="area-tag tag-infra">cluster1.langsmart.app</span>
     </div>
     <div class="feature-body">
-      The hosted gateway scores every chat turn. Easy work goes to <code>gpt-4o-mini</code>. Hard work stays on the model in the request. Pin a call to frontier with a header if you don't want the downgrade:
+      The hosted gateway scores every non-streamed chat turn. Easy work stays on the same provider's cheap model (mini on OpenAI, haiku on Anthropic) or hops to the virtual key's local pool if you pinned one. Hard work stays on the model in the request. Streamed calls skip scoring so playground SSE still works. Pin a call to frontier with a header if you don't want the downgrade:
     </div>
 <div class="code-block"><span class="k">curl</span> https://cluster1.langsmart.app/v1/chat/completions \
   -H <span class="s">"Authorization: Bearer $SMARTFLOW_KEY"</span> \
@@ -374,7 +374,7 @@ table.market .no { color: #64748b; }
   <span class="s">"capable_model"</span>: <span class="s">"gpt-4o"</span>
 }</div>
     <div class="feature-body">
-      Headers: <code>X-Smartflow-LCR: auto|local|frontier</code>. The trace on the turn shows which lane fired and why, so FinOps and support aren't guessing.
+      Headers: <code>X-Smartflow-LCR: auto|local|frontier</code>. Open the trace on that turn — Request → Routing shows <code>lcr:efficient</code>, <code>lcr:capable</code>, or <code>lcr:skipped stream</code>. FinOps has the Efficient share from the same stamp.
     </div>
   </div>
 
@@ -415,6 +415,7 @@ halo serve</pre>
     <span class="n">mode</span>: auto
     <span class="n">threshold</span>: 0.5
     <span class="n">efficient_agent</span>: glm
+    <span class="n">efficient_model</span>: glm-4.7
     <span class="n">capable_agent</span>: researcher   <span class="cm"># optional; omit to keep the inbound agent</span></div>
     <div class="feature-body">
       Force a lane from the runtime: <code>X-Halo-LCR: auto|local|frontier</code>. That header wins over YAML. Restart <code>halo serve</code> after you edit config or apply a license.
@@ -466,7 +467,7 @@ halo serve</pre>
     <table class="cheat">
       <thead><tr><th>You want…</th><th>Do this</th></tr></thead>
       <tbody>
-        <tr><td>See it on hosted Smartflow</td><td class="muted">Send a "hi, what is Rust?" and a production traceback. The first should land on mini; the second stays on the model you named. Trace shows <code>lcr:efficient</code> or <code>lcr:capable</code>.</td></tr>
+        <tr><td>See it on hosted Smartflow</td><td class="muted">Send a "hi, what is Rust?" and a production traceback. The first should land on the cheap lane; the second stays on the model you named. Trace Request → Routing shows <code>lcr:efficient</code> or <code>lcr:capable</code>. Streamed playground chat stays on the model you asked for (<code>lcr:skipped stream</code>).</td></tr>
         <tr><td>Never downgrade this call</td><td class="muted"><code>X-Smartflow-LCR: frontier</code> or <code>X-Halo-LCR: frontier</code>.</td></tr>
         <tr><td>Always use the GPU box</td><td class="muted">Smartflow: <code>SMARTFLOW_LCR=local</code> and the Ollama/vLLM provider. Halo: <code>mode: local</code>.</td></tr>
         <tr><td>Turn it off for one tenant</td><td class="muted">Policy attachment <code>lcr_mode: "off"</code> on that key or group.</td></tr>
