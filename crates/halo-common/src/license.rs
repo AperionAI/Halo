@@ -74,7 +74,7 @@ pub mod feature {
     /// Paid Cut tier ($50): cache, compression, prompt-cache injection.
     /// That's the bill cut. Also 30-day history and more than 3 agents.
     pub const CUT: &str = "cut";
-    /// Paid Route tier ($100): failover and (later) task routing on top of Cut.
+    /// Paid Route tier ($100): failover, task-class routing, and effort routing on top of Cut.
     pub const ROUTE: &str = "route";
     /// Paid Govern tier ($250). Gated on the relay; the flag exists so a
     /// minted key can name it without an older binary failing to parse.

@@ -915,6 +915,9 @@ fn report_cmd(
     ));
     let since = Some(chrono::Utc::now().timestamp() - hours * 3600);
     let r = report::build(&events, since, &cfg.price_table());
+    let audit_raw = std::fs::read_to_string(paths.audit()).unwrap_or_default();
+    let mut effort = report::effort_from_audit(&audit_raw);
+    effort.http_400 = report::count_http_400(&events);
     if log_path.exists() && r.total.requests == 0 {
         log(
             "\nThe telemetry log here has no requests in the selected window. If you expected \
@@ -922,8 +925,12 @@ fn report_cmd(
         );
     }
     let body = match format {
-        ReportFormat::Text => report::render(&r),
-        ReportFormat::Json => report::render_json(&r)?,
+        ReportFormat::Text => {
+            let mut body = report::render(&r);
+            body.push_str(&report::render_effort(&effort));
+            body
+        }
+        ReportFormat::Json => report::render_json(&r, &effort)?,
     };
     match out {
         Some(path) => {

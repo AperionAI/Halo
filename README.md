@@ -370,11 +370,15 @@ compression, Anthropic `cache_control` injection, semantic cache (opt-in),
 per-agent caps, alerting, 30-day history, unlimited agents. Free still
 writes the exact-match cache so it can star what Cut would have saved.
 
-Route ($100) is Cut plus failover and task-class routing. `failover:` maps an
+Route ($100) is Cut plus failover, task-class routing, and effort
+routing (`routing.effort`). Effort is on by default for Route (`mode: auto`,
+cheap agent `glm`). If that agent isn't registered, nothing hops. `failover:` maps an
 agent to a backup; on transport error or 502/503/504/529 Halo retries once
 with the backup provider/key. `routing.by_class` sends a class (`chat` /
 `embedding` / `code`, or `X-Halo-Task-Class`) to a cheaper agent's provider
-on the wire. Spend still hits the inbound agent's cap.
+on the wire. `routing.effort` (`mode: auto|local|frontier`, plus
+`efficient_agent` / `capable_agent`) scores the prompt and hops; `X-Halo-LCR`
+wins over YAML. Spend still hits the inbound agent's cap.
 
 Two things scale with a **paid license** (an offline, Ed25519-signed key — no
 phone-home, verified against a public key baked into the binary): how big
@@ -392,6 +396,7 @@ you're running more than one:
 | Per-agent caps, budget alerting webhooks | — | yes | yes |
 | Failover (`failover:` agent → backup) | — | — | yes |
 | Task-class routing (`routing.by_class`) | — | — | yes |
+| Effort routing (`routing.effort`, `X-Halo-LCR`) | — | — | yes |
 | Best-effort remote kill (pull from relay) | — | — | — |
 
 The 3-agent cap is the other non-fleet reason to upgrade besides history and

@@ -267,6 +267,60 @@ pub struct RoutingConfig {
     /// task class -> model name rewrite (e.g. `code: glm-4.7`).
     #[serde(default)]
     pub models: BTreeMap<String, String>,
+    /// Lowest-cost / effort router. Route tier. Default `auto` with
+    /// `efficient_agent: glm`; hops only fire if that agent exists.
+    #[serde(default)]
+    pub effort: EffortConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EffortConfig {
+    /// `off` / `auto` / `local` / `frontier`. Default auto on Route.
+    #[serde(default = "default_effort_mode")]
+    pub mode: String,
+    /// Confidence bar for `auto`. Default 0.5.
+    #[serde(default = "default_effort_threshold")]
+    pub threshold: f64,
+    /// Agent id whose key/provider is used on Efficient hops.
+    #[serde(default = "default_efficient_agent")]
+    pub efficient_agent: Option<String>,
+    /// Agent id whose key/provider is used on Capable hops.
+    /// None = keep the inbound agent for hard turns.
+    #[serde(default)]
+    pub capable_agent: Option<String>,
+    /// Model rewrite on Efficient hops. Required when the cheap agent is a
+    /// different provider (Claude → OpenAI glm). If unset, Halo picks a
+    /// same-family cheap default from the hop provider.
+    #[serde(default)]
+    pub efficient_model: Option<String>,
+    /// Model rewrite on Capable hops. None = keep the inbound model.
+    #[serde(default)]
+    pub capable_model: Option<String>,
+}
+
+fn default_effort_threshold() -> f64 {
+    0.5
+}
+
+fn default_effort_mode() -> String {
+    "auto".into()
+}
+
+fn default_efficient_agent() -> Option<String> {
+    Some("glm".into())
+}
+
+impl Default for EffortConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_effort_mode(),
+            threshold: default_effort_threshold(),
+            efficient_agent: default_efficient_agent(),
+            capable_agent: None,
+            efficient_model: None,
+            capable_model: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -649,16 +703,26 @@ mod tests {
         assert!(cfg.mcp_block_uncloaked_secrets);
         assert!(cfg.failover.is_empty());
         assert!(cfg.routing.by_class.is_empty());
+        assert_eq!(cfg.routing.effort.mode, "auto");
+        assert_eq!(cfg.routing.effort.efficient_agent.as_deref(), Some("glm"));
+        assert!(cfg.routing.effort.efficient_model.is_none());
+        assert!(cfg.routing.effort.capable_model.is_none());
     }
 
     #[test]
     fn routing_by_class_deserializes() {
         let cfg: Config = serde_yaml::from_str(
-            "routing:\n  by_class:\n    code: glm\n  models:\n    code: glm-4.7\n",
+            "routing:\n  by_class:\n    code: glm\n  models:\n    code: glm-4.7\n  effort:\n    mode: auto\n    threshold: 0.5\n    efficient_agent: glm\n    efficient_model: glm-4.7\n",
         )
         .unwrap();
         assert_eq!(cfg.routing.by_class.get("code").unwrap(), "glm");
         assert_eq!(cfg.routing.models.get("code").unwrap(), "glm-4.7");
+        assert_eq!(cfg.routing.effort.mode, "auto");
+        assert_eq!(cfg.routing.effort.efficient_agent.as_deref(), Some("glm"));
+        assert_eq!(
+            cfg.routing.effort.efficient_model.as_deref(),
+            Some("glm-4.7")
+        );
     }
 
     #[test]

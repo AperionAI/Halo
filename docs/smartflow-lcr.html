@@ -4,16 +4,16 @@
 <meta charset="UTF-8">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Smartflow Halo — One-Pager — APERION</title>
-<meta name="description" content="Smartflow Halo 1.6.5: local firewall for self-hosted agents. Free meters and caps. Cut applies cache and compression. OpenClaw and Hermes in one command.">
-<meta name="keywords" content="Smartflow Halo, self-hosted AI agents, OpenClaw, LLM proxy, budget kill switch, semantic cache, prompt caching, MCP cloak, AI governance, local dashboard">
+<title>Lowest-cost routing — Smartflow and Halo — APERION</title>
+<meta name="description" content="Most turns don't need the expensive model. Smartflow and Halo send easy work to a cheaper lane and keep hard problems on the model you asked for.">
+<meta name="keywords" content="lowest-cost routing, effort router, Smartflow, Halo, LLM cost, gpt-4o-mini, Ollama, AI gateway">
 <meta name="author" content="APERION">
 <meta name="robots" content="index, follow">
-<link rel="canonical" href="https://docs.aperion.ai/halo-onepager.html">
+<link rel="canonical" href="https://docs.aperion.ai/smartflow-lcr.html">
 <meta property="og:type" content="article">
-<meta property="og:url" content="https://docs.aperion.ai/halo-onepager.html">
-<meta property="og:title" content="Smartflow Halo — One-Pager">
-<meta property="og:description" content="Install in one line, point your runtime at it, get budgets, caching, compression, MCP cloak, and a local dashboard. Free tier, binary-only.">
+<meta property="og:url" content="https://docs.aperion.ai/smartflow-lcr.html">
+<meta property="og:title" content="Lowest-cost routing — Smartflow and Halo">
+<meta property="og:description" content="Score the prompt, send easy turns cheap, keep the hard ones on frontier. Same scorer in the gateway and on the laptop.">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -227,10 +227,11 @@ table.market .no { color: #64748b; }
   <div class="g-links">
     <a href="index.html">Home</a>
     <a href="smartflow-platform-overview.html">Smartflow Docs</a>
-    <a href="aperion-shield.html">Aperion Shield</a>
+    <a href="halo-onepager.html">Halo</a>
+    <a href="smartflow-lcr.html" class="active">Lowest-cost routing</a>
     <a href="index.html#support">Support</a>
   </div>
-  <span class="g-badge">v1.6.5 — One-Pager</span>
+  <span class="g-badge">Smartflow · Halo</span>
 </nav>
 
 <div class="container">
@@ -249,250 +250,236 @@ table.market .no { color: #64748b; }
     <span class="toast" id="pdf-toast" aria-live="polite"></span>
   </div>
 
-  <!-- ─────── HEADER ─────── -->
   <div class="header">
-    <div class="version-chip">Smartflow Halo · v1.6.5 · One-Pager</div>
-    <h1>Runtime governance for self-hosted<br>AI agents, in one binary.</h1>
+    <div class="version-chip">Lowest-cost routing · Smartflow + Halo</div>
+    <h1>Most turns don't need<br>the expensive model.</h1>
     <p class="tagline">
-      Halo sits between your agent runtime and the model providers (and your MCP servers). Free is the firewall: meter, cap, kill switch, denylist. Cut ($50/mo) is named Cut because it cuts the bill — cache, compression, prompt-cache injection. Route ($100) adds failover. Keys stay on the box. No model of any kind runs inside the process.
+      Smartflow and Halo look at the prompt before it hits a provider, then send easy work to a cheaper lane and keep the hard stuff on the model you asked for. If the cheap lane fails or refuses, one retry goes back up. No extra model sits in the middle judging the request.
     </p>
     <div class="badge-row">
-      <span class="badge badge-emerald"><i class="fas fa-code-branch"></i>&nbsp;Free firewall, forever</span>
-      <span class="badge badge-teal"><i class="fas fa-gauge-high"></i>&nbsp;Hard-cap kill switch</span>
-      <span class="badge badge-blue"><i class="fas fa-desktop"></i>&nbsp;macOS · Linux · Windows</span>
-      <span class="badge badge-violet"><i class="fab fa-rust"></i>&nbsp;153 tests · 0 LLMs bundled</span>
+      <span class="badge badge-emerald"><i class="fas fa-bolt"></i>&nbsp;On for hosted Smartflow</span>
+      <span class="badge badge-teal"><i class="fas fa-house"></i>&nbsp;On for Halo Route</span>
+      <span class="badge badge-blue"><i class="fas fa-sliders"></i>&nbsp;auto · local · frontier</span>
+      <span class="badge badge-violet"><i class="fas fa-rotate"></i>&nbsp;One quality retry</span>
     </div>
   </div>
 
-  <!-- ─────── HEADLINE KPI ─────── -->
-  <div class="area-heading">What one binary replaces</div>
+  <div class="area-heading">What you get</div>
   <div class="kpi-row">
-    <div class="kpi allow">    <div class="v">100%</div> <div class="l">Local-only free tier</div></div>
-    <div class="kpi warn">     <div class="v">2</div>    <div class="l">Cache layers (exact + semantic)</div></div>
-    <div class="kpi approval"> <div class="v">5</div>    <div class="l">Platforms (macOS/Linux/Win, arm64+x64)</div></div>
-    <div class="kpi block">    <div class="v">$0</div>  <div class="l">Cost of the free tier, ever</div></div>
+    <div class="kpi allow">    <div class="v">Cheap</div> <div class="l">Greetings, lookups, short asks</div></div>
+    <div class="kpi approval"> <div class="v">Frontier</div> <div class="l">Errors, analysis, long work</div></div>
+    <div class="kpi warn">     <div class="v">1 hop</div>    <div class="l">Retry if the cheap lane fails</div></div>
+    <div class="kpi block">    <div class="v">0 LLMs</div>  <div class="l">No judge model in the path</div></div>
   </div>
 
-  <!-- ─────── INSTALL (3 routes) ─────── -->
-  <div class="area-heading">Install (pick one)</div>
-  <div class="install-grid">
-    <div class="install-card brew">
-      <div class="head"><i class="fas fa-terminal"></i>&nbsp;curl | sh</div>
-      <pre>curl -fsSL \
-  https://halo-get.aperion.ai | sh</pre>
-    </div>
-    <div class="install-card docker">
-      <div class="head"><i class="fab fa-docker"></i>&nbsp;Docker</div>
-      <pre>docker run --rm \
-  -v halo-data:/data -p 8787:8787 \
-  ghcr.io/aperionai/halo</pre>
-    </div>
-    <div class="install-card cargo">
-      <div class="head"><i class="fab fa-windows"></i>&nbsp;Windows</div>
-      <pre>Grab the .zip from
-github.com/AperionAI/halo-dist
-/releases</pre>
-    </div>
-  </div>
-  <div class="feature-body" style="margin-bottom: 8px;">
-    Source is closed, but the binaries and Docker image are fully public — no
-    GitHub auth needed for any install path. Full detail in <code>docs/INSTALL.md</code>.
-  </div>
-
-  <!-- ─────── 60-SECOND INTEGRATION ─────── -->
-  <div class="area-heading">60-second integration</div>
-
+  <div class="area-heading">How it decides</div>
   <div class="feature new">
     <div class="feature-header">
       <div class="feature-num emerald">01</div>
-      <div class="feature-title-wrap">
-        <div class="feature-title">Register an agent, point your runtime at Halo</div>
-      </div>
-      <span class="area-tag tag-new">OpenAI / Anthropic / OpenClaw</span>
+      <div class="feature-title-wrap"><div class="feature-title">Score the prompt. Don't call another model.</div></div>
+      <span class="area-tag tag-new">same scorer in both products</span>
     </div>
     <div class="feature-body">
-      Halo mints a virtual key mapped to your real provider key (stored in your OS keychain — never on disk). Swap two env vars and every call now flows through the firewall. OpenClaw and Hermes get a one-command patch because env vars are not enough on those runtimes:
-    </div>
-<div class="code-block"><span class="cm"># 1. Register — the real key goes straight to your OS keychain.</span>
-halo agent add researcher --provider openai --key sk-...
-
-<span class="cm"># 2. Point your runtime at Halo instead of the provider.</span>
-<span class="k">export</span> OPENAI_API_KEY=<span class="s">sf_live_researcher_...</span>   <span class="cm"># virtual key printed above</span>
-<span class="k">export</span> OPENAI_BASE_URL=<span class="n">http://127.0.0.1:8787/v1</span>
-
-<span class="cm"># 3. Run it. OpenClaw: don't set env vars — they ignore them.</span>
-halo serve
-halo openclaw apply --agent researcher
-halo hermes apply --agent researcher</div>
-    <div class="feature-body">
-      Anthropic works identically (<code>--provider anthropic</code>, <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787</code>). Hermes: <code>halo hermes apply</code> writes <code>~/.hermes/config.yaml</code> and <code>.env</code> — env vars alone are not enough. Streaming passes through live. Buy Cut: <a href="https://deploy.langsmart.app/halo/buy/cut" style="color:#5eead4;">deploy.langsmart.app/halo/buy/cut</a>.
-    </div>
-  </div>
-
-  <!-- ─────── ARCHITECTURE ─────── -->
-  <div class="area-heading">How it sees the traffic</div>
-  <div class="arch"><span class="sub">Your agent runtime (OpenClaw, Hermes, a custom agent, ...)</span>
-       <span class="acc">│</span> OpenAI/Anthropic-shaped HTTP, virtual key
-       <span class="acc">▼</span>
-<span class="acc">┌────────────────────────────────────────────────────────────┐</span>
-<span class="acc">│</span> halo serve            <span class="sub">  ← ~/.halo/config.yaml</span>              <span class="acc">│</span>
-<span class="acc">│</span>   ┌──────────────────────────────────────────────────────┐ <span class="acc">│</span>
-<span class="acc">│</span>   <span class="acc">│</span>  budget check (hard-cap kill switch, always local)   <span class="acc">│</span> <span class="acc">│</span>
-<span class="acc">│</span>   <span class="acc">│</span>  exact-match cache  →  semantic cache (cross-provider) <span class="acc">│</span> <span class="acc">│</span>
-<span class="acc">│</span>   <span class="acc">│</span>  compression + Anthropic cache_control injection      <span class="acc">│</span> <span class="acc">│</span>
-<span class="acc">│</span>   <span class="acc">│</span>  MCP cloak/taint at the tool-call seam                <span class="acc">│</span> <span class="acc">│</span>
-<span class="acc">│</span>   └──────────────────────────────────────────────────────┘ <span class="acc">│</span>
-<span class="acc">│</span>   local dashboard :8788      metadata-only telemetry     <span class="acc">│</span>
-<span class="acc">└────────────────────────────────────────────────────────────┘</span>
-       <span class="acc">▼</span>                              <span class="acc">▼</span>
-<span class="sub">real provider (OpenAI, Anthropic, ...)</span>   <span class="sub">optional relay (savings dashboard)</span></div>
-
-  <!-- ─────── CORE FEATURES ─────── -->
-  <div class="area-heading">What's inside</div>
-  <div class="two-col">
-    <div class="feature security">
-      <div class="feature-header">
-        <div class="feature-num pink">02</div>
-        <div class="feature-title-wrap"><div class="feature-title">Budgets & kill switch</div></div>
-        <span class="area-tag tag-security">never offline</span>
-      </div>
-      <div class="feature-body">
-        Global + per-agent soft/hard caps over a rolling window. The hard cap is enforced <strong>locally and always</strong> — a single request can't overshoot it, and it doesn't depend on any relay being reachable. <code>halo kill &lt;agent&gt;</code> revokes a key instantly; streaming gets a mid-stream stop-loss too.
-      </div>
-    </div>
-    <div class="feature new">
-      <div class="feature-header">
-        <div class="feature-num emerald">03</div>
-        <div class="feature-title-wrap"><div class="feature-title">Two-layer caching</div></div>
-        <span class="area-tag tag-new">cross-provider</span>
-      </div>
-      <div class="feature-body">
-        Cut applies exact-match cache for byte-identical repeats, plus an optional <strong>semantic cache</strong> that catches reworded repeats — even across providers. Free still writes the exact-match cache so the dashboard can star what Cut would have saved. Cosine similarity is always re-checked at request time.
-      </div>
+      Before the provider call, the gateway already knows what kind of turn this is: greeting vs traceback, a definition vs a comparison, a short ask vs a long one. Lowest-cost routing uses those signals. One hint isn't enough. Two pointing the same way is. If it's a toss-up, the cheap lane wins. A tool error or an explicit failure skips cheap and goes straight to the capable model.
     </div>
   </div>
   <div class="two-col">
-    <div class="feature new">
+    <div class="feature">
       <div class="feature-header">
-        <div class="feature-num teal">04</div>
-        <div class="feature-title-wrap"><div class="feature-title">Compression & prompt-cache injection</div></div>
+        <div class="feature-num teal">02</div>
+        <div class="feature-title-wrap"><div class="feature-title">Three modes</div></div>
       </div>
       <div class="feature-body">
-        Cut shrinks the wire body (phrase reduction + whitespace) and injects Anthropic <code>cache_control</code> on large/repeated system prompts, tool defs, and attachments. Free computes the same ratio and stars the dollars. That's the bill cut.
+        <ul>
+          <li><strong>auto</strong> — score the prompt (this is the live default)</li>
+          <li><strong>local</strong> — always the cheap lane</li>
+          <li><strong>frontier</strong> — always the model you asked for</li>
+        </ul>
+        A request header beats a policy. A policy beats the gateway default. Set <code>off</code> if you want the old behavior for a key, a team, or a single call.
       </div>
     </div>
-    <div class="feature security">
+    <div class="feature">
       <div class="feature-header">
-        <div class="feature-num blue">05</div>
-        <div class="feature-title-wrap"><div class="feature-title">MCP cloak & taint</div></div>
-        <span class="area-tag tag-security">secret-safe</span>
+        <div class="feature-num blue">03</div>
+        <div class="feature-title-wrap"><div class="feature-title">Quality retry</div></div>
       </div>
       <div class="feature-body">
-        Halo fronts your MCP servers. Reference secrets in tool args as <code>{{cloak:NAME}}</code>; Halo resolves them only on the copy sent upstream and scrubs leaked values out of results. Reused directly from <a href="https://github.com/AperionAI/shield" style="color:#5eead4;">Aperion Shield</a>'s cloak/taint engine — not rebuilt.
+        If the cheap lane returns a 5xx, an empty body, or a refusal, Smartflow retries once on the original model. Halo Route already has failover for transport / 502 / 503 / 504 / 529. You don't eat a failed cheap call as the final answer.
       </div>
     </div>
   </div>
+
+  <div class="arch"><span class="sub">agent / app</span>
+        │
+        ▼
+   <span class="acc">Smartflow or Halo</span>   score prompt → cheap or frontier
+        │
+        ├─ easy  →  gpt-4o-mini / local GLM / Ollama
+        └─ hard  →  the model on the request
+              └─ cheap failed?  one retry on frontier</div>
+
+  <div class="area-heading">Smartflow (gateway)</div>
   <div class="feature infra">
     <div class="feature-header">
-      <div class="feature-num blue">06</div>
-      <div class="feature-title-wrap"><div class="feature-title">Local dashboard</div></div>
-      <span class="area-tag tag-infra">http://127.0.0.1:8788</span>
+      <div class="feature-num blue">04</div>
+      <div class="feature-title-wrap"><div class="feature-title">Hosted: already on</div></div>
+      <span class="area-tag tag-infra">cluster1.langsmart.app</span>
     </div>
     <div class="feature-body">
-      A second, loopback-only web UI bundled into the same binary: live spend/savings, cache-hit rate, agent list with one-click revoke, and a settings editor for budgets/cache/relay — all reading the exact same free-tier local data as <code>halo status</code>/<code>halo report</code>. Reads need nothing beyond loopback access; writes require a local-only token from <code>halo dashboard token</code> that never leaves the machine.
+      The hosted gateway scores every chat turn. Easy work goes to <code>gpt-4o-mini</code>. Hard work stays on the model in the request. Pin a call to frontier with a header if you don't want the downgrade:
+    </div>
+<div class="code-block"><span class="k">curl</span> https://cluster1.langsmart.app/v1/chat/completions \
+  -H <span class="s">"Authorization: Bearer $SMARTFLOW_KEY"</span> \
+  -H <span class="s">"X-Smartflow-LCR: frontier"</span> \
+  -d <span class="s">'{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'</span></div>
+  </div>
+
+  <div class="feature">
+    <div class="feature-header">
+      <div class="feature-num teal">05</div>
+      <div class="feature-title-wrap"><div class="feature-title">Your own cluster or on-prem box</div></div>
+    </div>
+    <div class="feature-body">
+      Same binary. Set the env on the proxy, point the cheap lane at whatever you actually run — OpenAI mini, a local Ollama, vLLM, a GPU box. Restart the proxy.
+    </div>
+<div class="code-block"><span class="n">SMARTFLOW_LCR</span>=auto
+<span class="n">SMARTFLOW_LCR_THRESHOLD</span>=0.5
+<span class="n">SMARTFLOW_LCR_EFFICIENT_PROVIDER</span>=openai    <span class="cm"># or ollama / vllm / openrouter</span>
+<span class="n">SMARTFLOW_LCR_EFFICIENT_MODEL</span>=gpt-4o-mini
+<span class="cm"># leave CAPABLE unset to keep the caller's model for hard turns</span></div>
+    <div class="feature-body">
+      Kubernetes:
+    </div>
+<div class="code-block">kubectl -n smartflow set env deployment/smartflow-proxy -c proxy \
+  SMARTFLOW_LCR=auto \
+  SMARTFLOW_LCR_EFFICIENT_PROVIDER=openai \
+  SMARTFLOW_LCR_EFFICIENT_MODEL=gpt-4o-mini</div>
+    <div class="feature-body">
+      Docker / compose: add the same keys to the proxy service environment. OpenRouter-edition installs that already have a local GPU should set <code>SMARTFLOW_LCR_EFFICIENT_PROVIDER=ollama</code> (or <code>vllm</code>) instead of OpenAI.
     </div>
   </div>
 
-  <!-- ─────── CLI CHEAT-SHEET ─────── -->
-  <div class="area-heading">CLI cheat-sheet</div>
+  <div class="feature">
+    <div class="feature-header">
+      <div class="feature-num pink">06</div>
+      <div class="feature-title-wrap"><div class="feature-title">Per team, per key, per request</div></div>
+    </div>
+    <div class="feature-body">
+      A policy attachment can set the mode and the two models. Same scoping you already use for model rewrite (directory group, virtual key, team). The request header still wins, so a debugger can force frontier without changing policy.
+    </div>
+<div class="code-block">{
+  <span class="s">"lcr_mode"</span>: <span class="s">"auto"</span>,
+  <span class="s">"effort_threshold"</span>: 0.5,
+  <span class="s">"efficient_model"</span>: <span class="s">"gpt-4o-mini"</span>,
+  <span class="s">"capable_model"</span>: <span class="s">"gpt-4o"</span>
+}</div>
+    <div class="feature-body">
+      Headers: <code>X-Smartflow-LCR: auto|local|frontier</code>. The trace on the turn shows which lane fired and why, so FinOps and support aren't guessing.
+    </div>
+  </div>
+
+  <div class="area-heading">Halo (home / laptop agents)</div>
+  <div class="install-grid">
+    <div class="install-card brew">
+      <div class="head"><i class="fas fa-download"></i> Install</div>
+      <pre>curl -fsSL https://halo-get.aperion.ai | sh</pre>
+    </div>
+    <div class="install-card docker">
+      <div class="head"><i class="fas fa-key"></i> Route license</div>
+      <pre>halo license apply
+halo license show</pre>
+    </div>
+    <div class="install-card cargo">
+      <div class="head"><i class="fas fa-plus"></i> Cheap agent</div>
+      <pre>halo agent add glm --provider openai
+halo serve</pre>
+    </div>
+  </div>
+  <div class="feature new">
+    <div class="feature-header">
+      <div class="feature-num emerald">07</div>
+      <div class="feature-title-wrap"><div class="feature-title">Route turns it on. Name the cheap agent <code>glm</code>.</div></div>
+      <span class="area-tag tag-new">$100 / mo</span>
+    </div>
+    <div class="feature-body">
+      Free and Cut never hop. Route scores the prompt and, when the turn looks easy, uses the <code>glm</code> agent's provider and key. Hard turns stay on the inbound agent (the one whose virtual key the runtime holds). Spend still counts against that inbound cap.
+    </div>
+    <div class="feature-body">
+      If first-run config has no <code>routing.effort</code> block, the binary is older than this feature. Re-run <code>curl -fsSL https://halo-get.aperion.ai | sh</code> and restart <code>halo serve</code>.
+    </div>
+    <div class="feature-body">
+      First run already writes this. If you named the cheap agent something else, change <code>efficient_agent</code>. If <code>glm</code> isn't registered, nothing hops — the call stays on the original agent.
+    </div>
+<div class="code-block"><span class="n">routing</span>:
+  <span class="n">effort</span>:
+    <span class="n">mode</span>: auto
+    <span class="n">threshold</span>: 0.5
+    <span class="n">efficient_agent</span>: glm
+    <span class="n">capable_agent</span>: researcher   <span class="cm"># optional; omit to keep the inbound agent</span></div>
+    <div class="feature-body">
+      Force a lane from the runtime: <code>X-Halo-LCR: auto|local|frontier</code>. That header wins over YAML. Restart <code>halo serve</code> after you edit config or apply a license.
+    </div>
+    <div class="feature-body">
+      OpenClaw: <code>halo openclaw apply</code>. Hermes: <code>halo hermes apply</code>. Same as the rest of Halo — don't hand-edit three runtime files if you can avoid it.
+    </div>
+  </div>
+
+  <div class="area-heading">Modes at a glance</div>
   <div class="table-wrap">
     <table class="cheat">
-      <thead><tr><th style="width: 34%;">Command</th><th>What it does</th></tr></thead>
+      <thead><tr><th>Mode</th><th>Smartflow</th><th>Halo Route</th></tr></thead>
       <tbody>
-        <tr><td><code>halo agent add &lt;name&gt;</code></td>   <td class="muted">Register an agent, mint a virtual key, store the real key in your OS keychain.</td></tr>
-        <tr><td><code>halo serve</code></td>                    <td class="muted">Run the proxy + the local dashboard (both on by default).</td></tr>
-        <tr><td><code>halo status</code></td>                   <td class="muted">Live spend by agent and current caps.</td></tr>
-        <tr><td><code>halo report</code></td>                   <td class="muted">Local COGS/savings view — works fully offline.</td></tr>
-        <tr><td><code>halo kill &lt;agent&gt;</code></td>       <td class="muted">Emergency stop: revoke a key, refused at once, zero network required.</td></tr>
-        <tr><td><code>halo dashboard token</code></td>          <td class="muted">Print (or <code>--regenerate</code>) the local token that gates dashboard writes.</td></tr>
-        <tr><td><code>halo embeddings set-key</code></td>       <td class="muted">Store the embedding API credential used by the semantic cache.</td></tr>
-        <tr><td><code>halo openclaw apply</code></td>         <td class="muted">Patch OpenClaw so traffic hits Halo. Env vars do not work on OpenClaw.</td></tr>
-        <tr><td><code>halo hermes apply</code></td>           <td class="muted">Patch Hermes <code>config.yaml</code> + <code>.env</code>. Env vars are not enough on Hermes either.</td></tr>
-        <tr><td><code>halo license apply</code></td>          <td class="muted">Paste the Cut/Route token from checkout. Restart <code>halo serve</code>.</td></tr>
+        <tr><td><code>auto</code></td><td class="muted">Score the prompt. Hosted default. Easy → cheap model, hard → caller's model.</td><td class="muted">Score the prompt. Default. Easy → <code>glm</code> agent, hard → inbound agent.</td></tr>
+        <tr><td><code>local</code></td><td class="muted">Always the cheap provider/model you configured.</td><td class="muted">Always the <code>efficient_agent</code>.</td></tr>
+        <tr><td><code>frontier</code></td><td class="muted">Always the model on the request (or <code>capable_model</code> if set).</td><td class="muted">Always the inbound / <code>capable_agent</code>.</td></tr>
+        <tr><td><code>off</code></td><td class="muted">Leave routing alone. On-prem default until you set the env.</td><td class="muted">Free and Cut. Route with <code>mode: off</code> if you want YAML but no hops.</td></tr>
       </tbody>
     </table>
   </div>
 
-  <!-- ─────── FREE vs PAID ─────── -->
-  <div class="area-heading">Free / Cut / Route</div>
+  <div class="area-heading">What this is not</div>
   <div class="compare">
     <div class="free">
-      <h4><i class="fas fa-code-branch"></i> &nbsp;Free (this binary)</h4>
+      <h4>It does</h4>
       <ul>
-        <li>Local budgets, hard-cap kill switch, <code>halo kill</code> — never paywalled</li>
-        <li>Starter denylist (cloud metadata + a few exfil sinks), true on install</li>
-        <li>MCP cloak/taint; uncloaked secrets in tool args are blocked</li>
-        <li><code>halo report</code> + loopback dashboard, 7-day history</li>
-        <li>Stars what Cut would have saved on this install's traffic</li>
-        <li>Up to 3 registered agents</li>
-        <li>No account. Nothing leaves the machine if <code>relay_url</code> is unset</li>
+        <li>Cut spend on greetings, lookups, and short asks</li>
+        <li>Keep analysis, troubleshooting, and errors on a capable model</li>
+        <li>Retry once if the cheap lane fails</li>
+        <li>Let a header or a policy pin a team or a single call</li>
+        <li>Stamp the trace so you can see which lane ran</li>
       </ul>
     </div>
     <div class="paid">
-      <h4><i class="fas fa-layer-group"></i> &nbsp;Cut $50 · Route $100</h4>
+      <h4>It does not</h4>
       <ul>
-        <li><strong>Cut</strong> applies cache, compression, prompt-cache injection — that's the bill cut</li>
-        <li>30-day history, unlimited agents, per-agent caps, alerting</li>
-        <li>Optional semantic cache (opt-in; spends a tiny embedding call)</li>
-        <li><strong>Route</strong> is Cut plus failover, task-class routing, and lowest-cost routing (easy turns hop to a <code>glm</code> agent; see <a href="smartflow-lcr.html" style="color:#5eead4;">the LCR page</a>)</li>
-        <li>Buy, then <code>halo license apply</code>. Offline Ed25519 key — no phone-home</li>
-        <li>Govern ($250) is not for sale yet</li>
-        <li><a href="https://deploy.langsmart.app/halo/buy/cut" style="color:#5eead4;">Buy Cut</a> · <a href="https://deploy.langsmart.app/halo/buy/route" style="color:#5eead4;">Buy Route</a></li>
+        <li>Call a judge LLM. There's no second bill for the decision</li>
+        <li>Move Halo keys off the machine</li>
+        <li>Hop on Free or Cut Halo. Safety and the bill-cut stay as they were</li>
+        <li>Replace your provider catalogue. It picks between two lanes you already have</li>
+        <li>Silence a pinned local provider. An explicit local target still wins</li>
       </ul>
     </div>
   </div>
 
-  <!-- ─────── VALUE VS THE MARKET ─────── -->
-  <div class="area-heading">Why Halo instead of...</div>
-  <table class="market">
-    <thead><tr><th>Capability</th><th class="us">Halo</th><th>LiteLLM proxy</th><th>Hosted gateways (Portkey / Helicone)</th><th>Raw SDK, no proxy</th></tr></thead>
-    <tbody>
-      <tr><td class="row-label">Local hard-cap kill switch</td><td class="us">Built in, offline-first</td><td class="no">Soft budgets, no offline guarantee</td><td class="no">Depends on their uptime</td><td class="no">None</td></tr>
-      <tr><td class="row-label">Cross-provider semantic cache</td><td class="us">Cut, opt-in</td><td class="no">Not built in</td><td class="no">Enterprise-tier add-on</td><td class="no">None</td></tr>
-      <tr><td class="row-label">MCP secret cloaking</td><td class="us">Built in (Shield-derived)</td><td class="no">Not built in</td><td class="no">Not built in</td><td class="no">None</td></tr>
-      <tr><td class="row-label">Provider keys leave your machine</td><td class="us">Never</td><td class="no">Depends on deployment</td><td class="no">Traffic transits their cloud</td><td class="no">N/A</td></tr>
-      <tr><td class="row-label">Runs a model to do its job</td><td class="us">Never — zero LLM deps</td><td class="no">No</td><td class="no">No</td><td class="no">N/A</td></tr>
-      <tr><td class="row-label">AI system registry / audit export</td><td class="us">Built in, free (JSON/CSV)</td><td class="no">Not built in</td><td class="no">Enterprise-tier add-on</td><td class="no">None</td></tr>
-      <tr><td class="row-label">Free tier ceiling</td><td class="us">Safety net uncapped forever; 3 agents</td><td class="no">Open source but no managed budgets/cache</td><td class="no">Usage-metered from day one</td><td class="no">No governance at all</td></tr>
-    </tbody>
-  </table>
-  <div class="feature-body" style="margin-bottom: 8px;">
-    The honest comparison: LiteLLM is a stronger general routing layer. Hosted gateways add observability but put traffic through their cloud. Halo is narrower on purpose — one binary, keys on the box, Free is a real firewall, Cut is the bill cut.
-  </div>
-
-  <!-- ─────── BUILD + LINKS ─────── -->
-  <div class="area-heading">Build from source · references</div>
-  <div class="feature infra">
-    <div class="feature-header">
-      <div class="feature-num blue">07</div>
-      <div class="feature-title-wrap"><div class="feature-title">From a fresh checkout (licensees with repo access)</div></div>
-      <span class="area-tag tag-infra">build</span>
-    </div>
-    <div class="feature-body">Rust 1.75+ stable. Own workspace, lean dependency tree, <code>redb</code>/SQLite single-file stores — no Redis, no Mongo, no Postgres.</div>
-<div class="code-block">cargo build --release
-./target/release/halo --version
-cargo test --release    <span class="cm"># 153 tests, all green</span></div>
-    <div class="feature-body">
-      <strong>Public binaries:</strong> <a href="https://github.com/AperionAI/halo-dist/releases" style="color: #5eead4;">github.com/AperionAI/halo-dist/releases</a> &nbsp;·&nbsp;
-      <strong>Container:</strong> <code>ghcr.io/aperionai/halo</code> &nbsp;·&nbsp;
-      <strong>Install guide:</strong> <code>docs/INSTALL.md</code> &nbsp;·&nbsp;
-      <strong>Design notes:</strong> <code>docs/DESIGN_REVIEW.md</code>
-    </div>
+  <div class="area-heading">Quick checks</div>
+  <div class="table-wrap">
+    <table class="cheat">
+      <thead><tr><th>You want…</th><th>Do this</th></tr></thead>
+      <tbody>
+        <tr><td>See it on hosted Smartflow</td><td class="muted">Send a "hi, what is Rust?" and a production traceback. The first should land on mini; the second stays on the model you named. Trace shows <code>lcr:efficient</code> or <code>lcr:capable</code>.</td></tr>
+        <tr><td>Never downgrade this call</td><td class="muted"><code>X-Smartflow-LCR: frontier</code> or <code>X-Halo-LCR: frontier</code>.</td></tr>
+        <tr><td>Always use the GPU box</td><td class="muted">Smartflow: <code>SMARTFLOW_LCR=local</code> and the Ollama/vLLM provider. Halo: <code>mode: local</code>.</td></tr>
+        <tr><td>Turn it off for one tenant</td><td class="muted">Policy attachment <code>lcr_mode: "off"</code> on that key or group.</td></tr>
+        <tr><td>Halo hops not firing</td><td class="muted"><code>halo license show</code> should read Route. <code>halo agent</code> list should include <code>glm</code> (or whatever you set). Restart <code>halo serve</code>.</td></tr>
+      </tbody>
+    </table>
   </div>
 
   <div class="footer">
-    Smartflow Halo is free (binary-only) for the local proxy &nbsp;·&nbsp; built by <a href="https://aperion.ai">APERION</a> &nbsp;·&nbsp;
-    Use the toolbar above to save this page as a PDF (dark or light handout).
+    Same scorer in Smartflow and Halo &nbsp;·&nbsp;
+    <a href="halo-onepager.html">Halo one-pager</a> &nbsp;·&nbsp;
+    <a href="smartflow-openrouter-edition.html">OpenRouter edition</a> &nbsp;·&nbsp;
+    built by <a href="https://aperion.ai">APERION</a>
   </div>
 
 </div>
@@ -549,7 +536,7 @@ cargo test --release    <span class="cm"># 153 tests, all green</span></div>
       '/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome \\',
       '  --headless=new --disable-gpu --no-pdf-header-footer \\',
       '  --virtual-time-budget=10000 \\',
-      '  --print-to-pdf=halo-onepager-dark.pdf \\',
+      '  --print-to-pdf=smartflow-lcr-dark.pdf \\',
       '  "' + url + '"'
     ].join('\n');
     var ok = false;

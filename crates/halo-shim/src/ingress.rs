@@ -131,6 +131,42 @@ fn extract_task_class(headers: &HeaderMap) -> Option<String> {
         })
 }
 
+fn extract_lcr(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-halo-lcr")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| {
+            matches!(
+                s.as_str(),
+                "auto"
+                    | "local"
+                    | "frontier"
+                    | "off"
+                    | "efficient"
+                    | "capable"
+                    | "cloud"
+                    | "cheap"
+            )
+        })
+}
+
+fn user_prompt_text(v: &Value) -> String {
+    if let Some(arr) = v.get("messages").and_then(|m| m.as_array()) {
+        for m in arr.iter().rev() {
+            if m.get("role").and_then(|r| r.as_str()) == Some("user") {
+                if let Some(s) = m.get("content").and_then(|c| c.as_str()) {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+    v.get("prompt")
+        .and_then(|p| p.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 /// Coarse class for Route `routing.by_class`. Embeddings stay `embedding`.
 /// `glm` in the model name is `code` (the cheap lane). Header wins.
 fn classify_task(kind: ApiKind, model: &str, header: Option<&str>) -> String {
@@ -293,6 +329,42 @@ async fn send_upstream(
     req.send().await
 }
 
+fn rewrite_effort_model(
+    cfg: &crate::config::EffortConfig,
+    tier: halo_common::effort::EffortTier,
+    hop_provider: Provider,
+    class_model: Option<&str>,
+    outbound: &mut String,
+    model: &mut String,
+) {
+    let picked = match tier {
+        halo_common::effort::EffortTier::Efficient => cfg
+            .efficient_model
+            .as_deref()
+            .filter(|m| !m.is_empty())
+            .map(|s| s.to_string())
+            .or_else(|| class_model.filter(|s| !s.is_empty()).map(|s| s.to_string()))
+            .or_else(|| {
+                halo_common::effort::cheap_model_for_provider(hop_provider.as_str())
+                    .map(|s| s.to_string())
+            }),
+        halo_common::effort::EffortTier::Capable => cfg
+            .capable_model
+            .clone()
+            .filter(|m| !m.is_empty()),
+    };
+    if let Some(m) = picked {
+        if m != *model {
+            halo_common::effort::rewrite_json_model_str(outbound, &m);
+            *model = m;
+        }
+    }
+}
+
+fn should_effort_escalate(efficient: bool, is_stream: bool, status: u16, body: &[u8]) -> bool {
+    efficient && !is_stream && halo_common::effort::should_escalate_quality(status, body)
+}
+
 async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKind) -> Response {
     // 1. Virtual-key auth.
     let vkey = match extract_vkey(&headers) {
@@ -339,6 +411,9 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
     let mut wire_agent = agent.clone();
     let mut wire_base_url = record.base_url.clone();
     let mut outbound_body = body.clone();
+    let mut effort_efficient = false;
+    let mut pre_effort_body = String::new();
+    let mut pre_effort_model = String::new();
     if st.entitlements.has(halo_common::license::feature::ROUTE) {
         if let Some(target) = st.cfg.routing.by_class.get(&task_class) {
             if target != &agent {
@@ -362,6 +437,81 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
                     outbound_body = j.to_string();
                 }
                 model = rewrite.clone();
+            }
+        }
+
+        let yaml_mode = st.cfg.routing.effort.mode.as_str();
+        let mode = if let Some(h) = extract_lcr(&headers) {
+            halo_common::effort::LcrMode::parse(&h)
+        } else {
+            halo_common::effort::LcrMode::parse(yaml_mode)
+        };
+        if is_stream && mode != halo_common::effort::LcrMode::Off {
+            st.audit(serde_json::json!({
+                "kind": "route_effort",
+                "tier": "skipped",
+                "reason": "lcr:skipped stream",
+            }));
+        } else if mode != halo_common::effort::LcrMode::Off {
+            let prompt = original
+                .as_ref()
+                .map(user_prompt_text)
+                .unwrap_or_default();
+            let inferred_stage = halo_common::effort::infer_stage(&prompt);
+            let inferred_intent = halo_common::effort::infer_intent(&prompt);
+            let signals = halo_common::effort::EffortSignals {
+                stage: inferred_stage,
+                intent: inferred_intent,
+                intent_confidence: 0.0,
+                task_class: task_class.as_str(),
+                prompt_chars: prompt.len(),
+                prior_stage: None,
+                mcp_error: halo_common::effort::body_has_tool_error(outbound_body.as_bytes()),
+                action_risk: None,
+            };
+            if let Some(dec) = halo_common::effort::decide(
+                mode,
+                &signals,
+                st.cfg.routing.effort.threshold,
+            ) {
+                if dec.tier == halo_common::effort::EffortTier::Efficient {
+                    effort_efficient = true;
+                    pre_effort_body = outbound_body.clone();
+                    pre_effort_model = model.clone();
+                }
+                let target = match dec.tier {
+                    halo_common::effort::EffortTier::Efficient => {
+                        st.cfg.routing.effort.efficient_agent.as_deref()
+                    }
+                    halo_common::effort::EffortTier::Capable => {
+                        st.cfg.routing.effort.capable_agent.as_deref()
+                    }
+                };
+                if let Some(target) = target {
+                    if target != wire_agent {
+                        if let Some(hop) = lookup_agent_hop(&st, target, kind) {
+                            st.audit(serde_json::json!({
+                                "kind": "route_effort",
+                                "tier": dec.tier.as_str(),
+                                "reason": dec.reason_line(),
+                                "from_agent": agent,
+                                "to_agent": hop.agent_id,
+                            }));
+                            provider = hop.provider;
+                            wire_agent = hop.agent_id;
+                            wire_base_url = hop.base_url;
+                        }
+                    }
+                }
+                let class_model = st.cfg.routing.models.get(&task_class).map(|s| s.as_str());
+                rewrite_effort_model(
+                    &st.cfg.routing.effort,
+                    dec.tier,
+                    provider,
+                    class_model,
+                    &mut outbound_body,
+                    &mut model,
+                );
             }
         }
     }
@@ -773,7 +923,7 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         }
     }
 
-    let status = resp.status();
+    let mut status = resp.status();
 
     // 5b. Genuine streaming passthrough -- forward bytes as they arrive
     // instead of buffering the full completion. Accounting happens once the
@@ -799,13 +949,97 @@ async fn handle_llm(st: AppState, headers: HeaderMap, body: String, kind: ApiKin
         .await;
     }
 
-    let ct = resp
+    let mut ct = resp
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|h| h.to_str().ok())
         .unwrap_or("application/json")
         .to_string();
-    let resp_body = resp.text().await.unwrap_or_default();
+    let mut resp_body = resp.text().await.unwrap_or_default();
+
+    // One quality retry on the inbound / capable agent. Do not recurse.
+    // Transport failover (502/503/504/529) already ran above.
+    if should_effort_escalate(
+        effort_efficient,
+        is_stream,
+        status.as_u16(),
+        resp_body.as_bytes(),
+    ) {
+        let escalate_id = st
+            .cfg
+            .routing
+            .effort
+            .capable_agent
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(agent.as_str());
+        if let Some(hop) = lookup_agent_hop(&st, escalate_id, kind) {
+            let mut retry_body = if pre_effort_body.is_empty() {
+                outbound.clone()
+            } else {
+                pre_effort_body
+            };
+            let mut retry_model = if pre_effort_model.is_empty() {
+                model.clone()
+            } else {
+                pre_effort_model
+            };
+            rewrite_effort_model(
+                &st.cfg.routing.effort,
+                halo_common::effort::EffortTier::Capable,
+                hop.provider,
+                st.cfg.routing.models.get(&task_class).map(|s| s.as_str()),
+                &mut retry_body,
+                &mut retry_model,
+            );
+            let hopped = hop.agent_id != wire_agent;
+            let model_changed = retry_model != model;
+            if hopped || model_changed {
+                if kind.is_chat() {
+                    let c = compress::compress_body(
+                        &retry_body,
+                        st.cfg.compression.verbose_phrases,
+                        st.cfg.compression.aggressive_abbreviations,
+                        st.cfg.compression.whitespace,
+                    );
+                    if cut {
+                        if let Some(b) = c.body {
+                            retry_body = b;
+                        }
+                        if matches!(kind, ApiKind::AnthropicMessages)
+                            && st.cfg.compression.anthropic_cache_control
+                        {
+                            if let Some(inj) = st.injector.process_anthropic(&retry_body) {
+                                retry_body = inj.body;
+                            }
+                        }
+                    }
+                }
+                if let Ok(r2) =
+                    send_upstream(&st, &headers, hop.provider, &hop.key, &hop.url, &retry_body)
+                        .await
+                {
+                    st.audit(serde_json::json!({
+                        "kind": "route_effort_escalate",
+                        "from_agent": wire_agent,
+                        "to_agent": hop.agent_id,
+                        "status": status.as_u16(),
+                    }));
+                    provider = hop.provider;
+                    model = retry_model;
+                    status = r2.status();
+                    ct = r2
+                        .headers()
+                        .get(header::CONTENT_TYPE)
+                        .and_then(|h| h.to_str().ok())
+                        .unwrap_or("application/json")
+                        .to_string();
+                    resp_body = r2.text().await.unwrap_or_default();
+                }
+            }
+        }
+    }
+
     let latency_ms = started.elapsed().as_millis() as u64;
 
     // 6. Usage + cost accounting.
@@ -1123,5 +1357,67 @@ mod classify_tests {
             classify_task(ApiKind::AnthropicMessages, "claude-sonnet-4-5", None),
             "chat"
         );
+    }
+
+    #[test]
+    fn effort_hop_rewrites_claude_model_for_openai_glm() {
+        let cfg = crate::config::EffortConfig {
+            mode: "auto".into(),
+            threshold: 0.5,
+            efficient_agent: Some("glm".into()),
+            capable_agent: None,
+            efficient_model: Some("glm-4.7".into()),
+            capable_model: None,
+        };
+        let mut body =
+            r#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}"#
+                .to_string();
+        let mut model = "claude-sonnet-4-5".to_string();
+        rewrite_effort_model(
+            &cfg,
+            halo_common::effort::EffortTier::Efficient,
+            Provider::Openai,
+            None,
+            &mut body,
+            &mut model,
+        );
+        assert_eq!(model, "glm-4.7");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["model"], "glm-4.7");
+        assert!(!body.contains("claude-"));
+    }
+
+    #[test]
+    fn effort_hop_defaults_openai_cheap_model_when_unset() {
+        let cfg = crate::config::EffortConfig::default();
+        let mut body =
+            r#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}"#
+                .to_string();
+        let mut model = "claude-sonnet-4-5".to_string();
+        rewrite_effort_model(
+            &cfg,
+            halo_common::effort::EffortTier::Efficient,
+            Provider::Openai,
+            None,
+            &mut body,
+            &mut model,
+        );
+        assert_eq!(model, "gpt-4o-mini");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["model"], "gpt-4o-mini");
+    }
+
+    #[test]
+    fn empty_efficient_response_escalates_when_not_streaming() {
+        assert!(should_effort_escalate(true, false, 200, b"   "));
+        assert!(should_effort_escalate(true, false, 502, b"{\"ok\":true}"));
+        assert!(!should_effort_escalate(true, true, 200, b"   "));
+        assert!(!should_effort_escalate(false, false, 200, b"   "));
+        assert!(!should_effort_escalate(
+            true,
+            false,
+            200,
+            br#"{"content":[{"type":"text","text":"hello"}]}"#
+        ));
     }
 }

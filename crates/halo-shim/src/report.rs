@@ -243,6 +243,76 @@ pub fn render(report: &Report) -> String {
     out
 }
 
+/// Effort-router rollup from `audit.jsonl` (and 400s from telemetry).
+#[derive(Debug, Default, Clone)]
+pub struct EffortReport {
+    pub hops: u64,
+    pub hops_efficient: u64,
+    pub hops_capable: u64,
+    pub skipped_stream: u64,
+    pub escalations: u64,
+    pub http_400: u64,
+}
+
+pub fn effort_from_audit(audit_jsonl: &str) -> EffortReport {
+    let mut r = EffortReport::default();
+    for line in audit_jsonl.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let event = v.get("event").unwrap_or(&v);
+        let kind = event.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+        match kind {
+            "route_effort" => {
+                let tier = event
+                    .get("tier")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
+                if tier == "skipped" {
+                    r.skipped_stream += 1;
+                } else {
+                    r.hops += 1;
+                    if tier == "efficient" {
+                        r.hops_efficient += 1;
+                    } else if tier == "capable" {
+                        r.hops_capable += 1;
+                    }
+                }
+            }
+            "route_effort_escalate" => r.escalations += 1,
+            _ => {}
+        }
+    }
+    r
+}
+
+pub fn count_http_400(events: &[TelemetryEvent]) -> u64 {
+    events
+        .iter()
+        .filter(|e| e.error_class == "http_400" || e.error_class.starts_with("http_400"))
+        .count() as u64
+}
+
+pub fn render_effort(effort: &EffortReport) -> String {
+    let mut out = String::new();
+    out.push_str("\nEffort routing (audit.jsonl)\n");
+    out.push_str(&format!(
+        "  hops:          {}  (efficient {} / capable {})\n",
+        effort.hops, effort.hops_efficient, effort.hops_capable
+    ));
+    out.push_str(&format!("  skipped stream: {}\n", effort.skipped_stream));
+    out.push_str(&format!("  escalations:    {}\n", effort.escalations));
+    out.push_str(&format!(
+        "  upstream 400s:  {}  (telemetry, any path — not hop-joined)\n",
+        effort.http_400
+    ));
+    out
+}
+
 #[derive(serde::Serialize)]
 struct RollupJson {
     requests: u64,
@@ -270,6 +340,28 @@ struct ReportJson {
     by_subject: Vec<NamedRollupJson>,
     by_task: Vec<NamedRollupJson>,
     by_hour: Vec<NamedRollupJson>,
+    effort: EffortJson,
+}
+
+#[derive(serde::Serialize)]
+struct EffortJson {
+    hops: u64,
+    hops_efficient: u64,
+    hops_capable: u64,
+    skipped_stream: u64,
+    escalations: u64,
+    http_400: u64,
+}
+
+fn effort_json(e: &EffortReport) -> EffortJson {
+    EffortJson {
+        hops: e.hops,
+        hops_efficient: e.hops_efficient,
+        hops_capable: e.hops_capable,
+        skipped_stream: e.skipped_stream,
+        escalations: e.escalations,
+        http_400: e.http_400,
+    }
 }
 
 fn rollup_json(r: &AgentRollup) -> RollupJson {
@@ -297,7 +389,7 @@ fn named(map: &BTreeMap<String, AgentRollup>) -> Vec<NamedRollupJson> {
 
 /// Machine-readable export of the same rollup `render` prints. Window is
 /// whatever the caller already filtered; this does not re-clamp.
-pub fn render_json(report: &Report) -> anyhow::Result<String> {
+pub fn render_json(report: &Report, effort: &EffortReport) -> anyhow::Result<String> {
     let body = ReportJson {
         total: rollup_json(&report.total),
         by_agent: named(&report.by_agent),
@@ -305,6 +397,7 @@ pub fn render_json(report: &Report) -> anyhow::Result<String> {
         by_subject: named(&report.by_subject),
         by_task: named(&report.by_task),
         by_hour: named(&report.by_hour),
+        effort: effort_json(effort),
     };
     Ok(serde_json::to_string_pretty(&body)?)
 }
@@ -397,7 +490,7 @@ mod tests {
         let rendered = render(&r);
         assert!(rendered.contains("By task:"));
         assert!(rendered.contains("By hour (UTC):"));
-        let json = render_json(&r).unwrap();
+        let json = render_json(&r, &EffortReport::default()).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["total"]["requests"], 2);
         assert_eq!(v["by_task"].as_array().unwrap().len(), 2);
@@ -437,5 +530,25 @@ mod tests {
         assert!((r.total.savings() - 0.0).abs() < 1e-9);
         let rendered = render(&r);
         assert!(rendered.contains("Cut would have saved"));
+    }
+
+    #[test]
+    fn effort_audit_counts_hops_escalations_and_stream_skip() {
+        let audit = r#"
+{"event":{"kind":"route_effort","tier":"efficient"}}
+{"event":{"kind":"route_effort","tier":"capable"}}
+{"event":{"kind":"route_effort","tier":"skipped","reason":"lcr:skipped stream"}}
+{"event":{"kind":"route_effort_escalate"}}
+{"event":{"kind":"failover"}}
+"#;
+        let e = effort_from_audit(audit);
+        assert_eq!(e.hops, 2);
+        assert_eq!(e.hops_efficient, 1);
+        assert_eq!(e.hops_capable, 1);
+        assert_eq!(e.skipped_stream, 1);
+        assert_eq!(e.escalations, 1);
+        let mut four = ev("a", "claude-sonnet-4-5", 0.0, 0.0, false);
+        four.error_class = "http_400".into();
+        assert_eq!(count_http_400(&[four]), 1);
     }
 }

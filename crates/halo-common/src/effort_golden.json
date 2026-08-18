@@ -1,0 +1,110 @@
+[
+  {
+    "id": "c1-greeting-short",
+    "stage": "greeting",
+    "intent": "Unknown",
+    "task_class": "chat",
+    "prompt_chars": 113,
+    "expected_tier": "efficient",
+    "note": "cluster1 2026-08-08 demo slice; greeting + short_prompt"
+  },
+  {
+    "id": "c1-greeting-longer",
+    "stage": "greeting",
+    "intent": "Unknown",
+    "task_class": "chat",
+    "prompt_chars": 190,
+    "expected_tier": "efficient",
+    "note": "cluster1 2026-08-08 demo slice"
+  },
+  {
+    "id": "c1-error-stage",
+    "stage": "error",
+    "intent": "Unknown",
+    "task_class": "chat",
+    "prompt_chars": 131,
+    "expected_tier": "capable",
+    "note": "cluster1 2026-08-08 demo slice; stage:error hard override"
+  },
+  {
+    "id": "c1-error-longer",
+    "stage": "error",
+    "intent": "Unknown",
+    "task_class": "chat",
+    "prompt_chars": 157,
+    "expected_tier": "capable",
+    "note": "cluster1 2026-08-08 demo slice"
+  },
+  {
+    "id": "c1-maintenance-short",
+    "stage": "maintenance",
+    "intent": "Unknown",
+    "task_class": "chat",
+    "prompt_chars": 113,
+    "expected_tier": "efficient",
+    "note": "cluster1 2026-08-08 demo slice"
+  },
+  {
+    "id": "c1-maintenance-190",
+    "stage": "maintenance",
+    "intent": "Unknown",
+    "task_class": "chat",
+    "prompt_chars": 190,
+    "expected_tier": "efficient",
+    "note": "cluster1 2026-08-08 demo slice"
+  },
+  {
+    "id": "c1-discovery-short",
+    "stage": "discovery",
+    "intent": "Unknown",
+    "task_class": "chat",
+    "prompt_chars": 147,
+    "expected_tier": "efficient",
+    "note": "cluster1 2026-08-08 demo slice; one short_prompt signal, defaulted cheap"
+  },
+  {
+    "id": "c1-discovery-anthropic",
+    "stage": "discovery",
+    "intent": "Unknown",
+    "task_class": "chat",
+    "prompt_chars": 182,
+    "expected_tier": "efficient",
+    "note": "cluster1 2026-08-08 demo slice; Anthropic tenant"
+  },
+  {
+    "id": "miss-short-code-troubleshoot",
+    "stage": null,
+    "intent": "Troubleshooting",
+    "task_class": "code",
+    "prompt_chars": 80,
+    "expected_tier": "capable",
+    "note": "false-cheap we closed in step 1: short 'fix this' must stay Capable"
+  },
+  {
+    "id": "keep-embedding-cheap",
+    "stage": null,
+    "intent": null,
+    "task_class": "embedding",
+    "prompt_chars": 40,
+    "expected_tier": "efficient",
+    "note": "embedding class stays cheap"
+  },
+  {
+    "id": "analysis-comparison-long",
+    "stage": "analysis",
+    "intent": "Comparison",
+    "task_class": "chat",
+    "prompt_chars": 2400,
+    "expected_tier": "capable",
+    "note": "two Capable signals + long_prompt"
+  },
+  {
+    "id": "greeting-definition-short",
+    "stage": "greeting",
+    "intent": "Definition",
+    "task_class": "chat",
+    "prompt_chars": 40,
+    "expected_tier": "efficient",
+    "note": "the cheap lane we want greetings to take"
+  }
+]
